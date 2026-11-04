@@ -202,6 +202,24 @@ def test_backtest_cli_csv():
     assert len(outs) == 2 and all((o / "summary.txt").exists() for o in outs)
 
 
+def test_scan_pool_by_volume_not_stage():
+    import json
+    from backtest import run as R
+    d = Path(tempfile.mkdtemp())
+    (d / "daily").mkdir()
+    swing_data().rename_axis("date").to_csv(d / "daily" / "1111.csv")
+    base = dict(market="TW", tt=[False] * 8, rs=1)
+    scan = {"generated_at": "2026-11-04T00:00:00+00:00", "stocks": [
+        {**base, "ticker": "1111.TW", "stage": 4, "avg_vol50": 9e6},   # 今天第四階段，仍要納入
+        {**base, "ticker": "2222.TW", "stage": 2, "avg_vol50": 1e5},   # 量小，--top 1 時排除
+        {**base, "ticker": "AAPL", "market": "US", "stage": 2, "avg_vol50": 9e9}]}
+    (d / "scan.json").write_text(json.dumps(scan), encoding="utf-8")
+    R.main(["swing", "--source", "csv", "--csv-dir", str(d), "--scan", str(d / "scan.json"), "--top", "1",
+            "--out", str(d / "out"), "--set", "capital=5000000"])
+    text = (next((d / "out").iterdir()) / "summary.txt").read_text(encoding="utf-8")
+    assert "股票：1 檔" in text and "交易次數：1" in text and "均量最大的 1 檔" in text
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

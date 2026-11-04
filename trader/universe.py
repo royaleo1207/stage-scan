@@ -9,6 +9,11 @@ TPE = timezone(timedelta(hours=8))
 
 
 def load_scan(path: str) -> dict:
+    """讀取 stage_scan.json；可以是檔案路徑或網址（例如 GitHub Pages 上的最新掃描）。"""
+    if path.startswith(("http://", "https://")):
+        from urllib.request import urlopen
+        with urlopen(path, timeout=60) as r:
+            return json.loads(r.read().decode("utf-8"))
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 

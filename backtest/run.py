@@ -1,7 +1,7 @@
 """回測指令。
 
     python -m backtest.run daytrade --symbols 2330 2454 3008
-    python -m backtest.run daytrade --scan stage_scan.json --interval 5m
+    python -m backtest.run swing --scan https://royaleo1207.github.io/stage-scan/stage_scan.json --top 150
     python -m backtest.run swing --symbols 2330 2454 ... --start 2023-01-01
     python -m backtest.run swing --source csv --csv-dir data --symbols 2330 2454
 
@@ -133,7 +133,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="台股自動交易回測")
     ap.add_argument("mode", choices=["daytrade", "swing"])
     ap.add_argument("--symbols", nargs="*", default=[], help="股票代號，例如 2330 2454")
-    ap.add_argument("--scan", help="改用 stage_scan.json 的台股名單（依目前選股條件）")
+    ap.add_argument("--scan", help="從 stage_scan.json（檔案路徑或網址）取成交量最大的台股當股票池")
+    ap.add_argument("--top", type=int, default=100, help="搭配 --scan：取成交量前幾檔（預設 100）")
     ap.add_argument("--source", default="yfinance", choices=["yfinance", "csv"])
     ap.add_argument("--csv-dir", default="data")
     ap.add_argument("--interval", default="5m", choices=["1m", "5m", "15m"], help="當沖分 K 週期")
@@ -147,17 +148,25 @@ def main(argv=None):
         k, _, v = kv.partition("=")
         cfg = settings.set_value(cfg, k, settings.parse_value(k, v))
     symbols = list(a.symbols)
+    scan_note = None
     if a.scan:
+        # 依「成交量」挑股票池，不用今天的階段或 RS 篩選：
+        # 那會偷看未來（今天在第二階段的股票，過去多半漲得好），回測會偏樂觀。
+        # 階段、趨勢樣板、RS 都在回測中逐日用當時的資料判斷。
         scan = load_scan(a.scan)
-        u = cfg["universe"]
-        for s in scan.get("stocks", []):
-            if s.get("market") == "TW" and s.get("stage") in u["stages"] and (s.get("rs") or 0) >= u["min_rs"]:
-                symbols.append(s["ticker"].split(".")[0])
-        symbols = symbols[: cfg["max_watchlist"]] if a.mode == "daytrade" else symbols
+        tw = [s for s in scan.get("stocks", []) if s.get("market") == "TW" and s.get("avg_vol50")]
+        tw.sort(key=lambda s: s["avg_vol50"], reverse=True)
+        symbols += [s["ticker"].split(".")[0] for s in tw[: a.top]]
+        scan_note = (f"股票池：掃描資料中 50 日均量最大的 {min(a.top, len(tw))} 檔台股（依目前上市櫃名單，"
+                     "已下市股票不在內，結果仍會略為樂觀）")
     if not symbols:
         sys.exit("請用 --symbols 或 --scan 指定股票。")
 
+    symbols = list(dict.fromkeys(symbols))   # 去除重複
+    print(f"下載 {len(symbols)} 檔資料中，股票多時需要幾分鐘…", file=sys.stderr)
     df, summ, skipped, notes, period = (run_daytrade if a.mode == "daytrade" else run_swing)(symbols, cfg, a)
+    if scan_note:
+        notes.insert(0, scan_note)
 
     out = Path(a.out) / f"{a.mode}_{datetime.now():%Y%m%d_%H%M%S}"
     out.mkdir(parents=True, exist_ok=True)

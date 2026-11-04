@@ -38,6 +38,18 @@ python -m backtest.run swing --symbols 2330 2454 3008 2317 2308 2382 3711 2603 2
 python -m backtest.run daytrade --symbols 2330 --set daytrade.exit.take_profit_pct=4
 ```
 
+用整個台股市場當股票池（依 50 日均量取前 N 檔；階段與 RS 在回測中逐日判斷，不偷看未來）：
+
+```bash
+python -m backtest.run swing --scan https://royaleo1207.github.io/stage-scan/stage_scan.json --top 150 --start 2023-01-01 --set swing.lot_mode=odd
+```
+
+檢查 Yahoo 分 K 成交量是否可信：
+
+```bash
+python -m backtest.check_volume 2317 2303
+```
+
 `--set` 只影響這次回測，不會儲存。結果存在 `backtest/results/`（`summary.txt`、`trades.csv`）。
 
 ### 測試
