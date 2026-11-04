@@ -1,0 +1,45 @@
+name: 每日階段掃描
+
+on:
+  schedule:
+    # 週一到週五 UTC 22:30（台灣時間隔天早上 6:30），美股與台股都已收盤
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch: {}   # 可在 Actions 頁面手動執行
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安裝套件
+        run: pip install yfinance pandas numpy lxml requests
+      - name: 執行掃描
+        run: python stage_scanner.py --out site/stage_scan
+      - name: 放入網頁
+        run: cp index.html site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: scan
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
