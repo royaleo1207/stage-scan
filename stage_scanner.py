@@ -247,7 +247,11 @@ def analyze(df):
     wk = c.resample("W-FRI").last().dropna()
     m30, m40 = wk.rolling(30).mean(), wk.rolling(40).mean()
     wst = stage.resample("W-FRI").last().reindex(wk.index)
-    wk, m30, m40, wst = (x.iloc[-CHART_WEEKS:] for x in (wk, m30, m40, wst))
+    # 每個週線點實際對應的最後交易日（整週休市的週會被 dropna 剔除，
+    # 若用「起始日 + 7 天」推算日期會錯位，故另外輸出）
+    cv = c.dropna()
+    wdt = pd.Series(cv.index, index=cv.index).resample("W-FRI").last().reindex(wk.index)
+    wk, m30, m40, wst, wdt = (x.iloc[-CHART_WEEKS:] for x in (wk, m30, m40, wst, wdt))
 
     def rnd(x, d=4):
         return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(float(x), d)
@@ -269,6 +273,7 @@ def analyze(df):
         "avg_vol50": rnd(v.iloc[-50:].mean(), 0),
         "w": {
             "start": wk.index[0].strftime("%Y-%m-%d"),
+            "d": [x.strftime("%Y-%m-%d") for x in wdt],
             "c": [rnd(x, 3) for x in wk],
             "m30": [rnd(x, 3) for x in m30],
             "m40": [rnd(x, 3) for x in m40],

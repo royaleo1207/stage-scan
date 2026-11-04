@@ -341,6 +341,11 @@ function filtered(){
 }
 
 /* ── 週線圖（含階段底色、30／40 週均線） ── */
+// 第 i 個週線點的日期：優先用 w.d（實際最後交易日），舊資料沒有才用起始日 + 7 天推算
+function wDate(w, i){
+  if (w.d && w.d[i]) return w.d[i];
+  return new Date(new Date(w.start + "T00:00:00Z").getTime() + i*7*864e5).toISOString().slice(0,10);
+}
 function chart(w, W, H, axis){
   const c = w.c, n = c.length; if (n < 2) return "";
   const vals = [...c, ...w.m30, ...w.m40].filter(v => v != null);
@@ -357,8 +362,8 @@ function chart(w, W, H, axis){
   if (axis){
     for (let k = 0; k <= 3; k++){ const v = lo + (hi-lo)*k/3, yy = y(v);
       ax += `<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/><text x="${L-6}" y="${yy+4}" text-anchor="end" font-size="11" fill="var(--muted)">${fmtP(v)}</text>`; }
-    const d0 = new Date(w.start + "T00:00:00Z"), dn = new Date(d0.getTime() + (n-1)*7*864e5);
-    ax += `<text x="${L}" y="${H-4}" font-size="11" fill="var(--muted)">${d0.toISOString().slice(0,7)}</text><text x="${W-R}" y="${H-4}" font-size="11" fill="var(--muted)" text-anchor="end">${dn.toISOString().slice(0,7)}</text>`;
+    const d0 = wDate(w, 0), dn = wDate(w, n-1);
+    ax += `<text x="${L}" y="${H-4}" font-size="11" fill="var(--muted)">${d0.slice(0,7)}</text><text x="${W-R}" y="${H-4}" font-size="11" fill="var(--muted)" text-anchor="end">${dn.slice(0,7)}</text>`;
   }
   const sw = axis ? 1 : .6;
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" aria-hidden="true">${bg}${ax}
@@ -453,7 +458,7 @@ function bindTips(){
       const i = Math.max(0, Math.min(n-1, Math.round((sx - L) / ((W-L-1)/(n-1)))));
       const xx = L + i*(W-L-1)/(n-1);
       hair.setAttribute("x1", xx); hair.setAttribute("x2", xx); hair.setAttribute("visibility","visible");
-      const d = new Date(new Date(s.w.start+"T00:00:00Z").getTime() + i*7*864e5).toISOString().slice(0,10);
+      const d = wDate(s.w, i);
       tip.textContent = `${d}　收 ${s.w.c[i]!=null?fmtP(s.w.c[i]):"—"}　${s.w.st[i]?STAGE[s.w.st[i]]:""}`;
       tip.style.display = "block";
       const px = xx * r.width / W; tip.style.left = Math.max(70, Math.min(r.width-70, px)) + "px"; tip.style.top = "6px";
