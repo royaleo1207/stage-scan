@@ -25,11 +25,11 @@ daytrade:
   limit_buffer_pct: 1.5     # 距漲跌停不足此 % 不進場
   entry:
     start: "09:15"          # 最早進場時間
-    end: "10:30"            # 最晚進場時間
+    end: "10:00"            # 最晚進場時間
   exit:
     stop_loss_pct: 2.0      # 停損 %（與開盤區間另一端取較近者）
-    take_profit_pct: 4.0    # 停利 %，留空表示不設
-    force_close: "13:15"    # 強制平倉時間
+    take_profit_pct: 6.0    # 停利 %，留空表示不設
+    force_close: "13:10"    # 強制平倉時間
   max_amount_per_trade: 300000  # 單筆金額上限（元），例如 30 萬
   max_entries_per_symbol: 1
 
@@ -55,4 +55,4 @@ risk:
   flatten_on_stop: true     # 緊急停止時是否平掉所有當沖部位
 
 notify:
-  channel: telegram         # telegram 或 line
+  channel: line             # LINE Messaging API（官方帳號機器人）
