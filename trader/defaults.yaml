@@ -1,4 +1,9 @@
-# 複製成 config.yaml 後修改。config.yaml 含個人設定，不要提交到儲存庫。
+# 交易參數預設值。請勿直接修改這個檔案。
+# 你修改過的值會存在 trader/config.yaml（只記錄跟預設不同的項目，不提交到儲存庫），
+# 程式啟動時以「預設值 + 你的設定」合併使用。修改方式：
+#   python -m trader.settings show                                  顯示目前設定
+#   python -m trader.settings set daytrade.exit.take_profit_pct 5   修改並儲存
+#   python -m trader.settings reset daytrade.exit.take_profit_pct   改回預設
 
 mode: daytrade              # daytrade（當沖）或 swing（波段）
 broker: paper               # paper（程式內模擬）、kgi_sim（凱基模擬環境）、kgi_live（凱基正式環境，真實下單）
@@ -6,7 +11,7 @@ kgi:
   account: ""               # 證券帳號（依 show_account() 結果填寫；身分證與密碼不寫在這裡，啟動時輸入）
 max_watchlist: 30           # 同時訂閱報價的檔數上限，依帳號等級調整（新星 30、菁英 50、尊爵 100）
 order_confirm: manual       # manual（確認才送單，預設）或 auto（全自動免確認）
-confirm_timeout_sec: 60     # 手動確認逾時秒數，逾時自動取消
+confirm_timeout_sec: 60     # 本機視窗確認的逾時秒數，逾時自動取消
 
 capital: 1000000            # 總資金（元）
 
@@ -55,4 +60,12 @@ risk:
   flatten_on_stop: true     # 緊急停止時是否平掉所有當沖部位
 
 notify:
-  channel: line             # LINE Messaging API（官方帳號機器人）
+  channel: line             # line（LINE 官方帳號機器人推播）或 none（不通知）
+  # 金鑰不寫在這裡，請設成環境變數（或寫在 trader/.env，不會提交）：
+  #   LINE_CHANNEL_ACCESS_TOKEN  官方帳號的 Channel access token
+  #   LINE_TO                    接收通知的 LINE 使用者 ID（U 開頭）
+  on_signal: true           # 出現進場訊號（含等待確認的委託）
+  on_fill: true             # 成交
+  on_exit: true             # 出場（停損、停利、強制平倉）
+  on_error: true            # 錯誤、斷線、對帳不一致
+  daily_summary: true       # 收盤後每日總結

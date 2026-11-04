@@ -1,4 +1,4 @@
-# 台股自動交易規格書（草案 v0.3）
+# 台股自動交易規格書（草案 v0.4）
 
 搭配 `stage_scan.json`（每日 6:30 產生的階段掃描結果），透過凱基 SuperPy 下單。
 兩種模式並存：**波段模式**（依《超級績效》規則）與**當沖模式**（現股當沖，開盤區間突破）。
@@ -76,20 +76,45 @@
 
 ## 4. 送單方式
 
-- `order_confirm: manual`（預設）：程式產生「建議委託單」，通知使用者後等待確認才送出。超過 `confirm_timeout_sec` 未確認就自動取消。
+- `order_confirm: manual`（預設）：程式產生「建議委託單」，在本機程式視窗等待使用者確認才送出（同時發 LINE 通知提醒）。超過 `confirm_timeout_sec` 未確認就自動取消。
 - `order_confirm: auto`：符合條件即直接送單，不需確認。開啟時，啟動時會再提示一次風險。
 - 兩種方式都受以下限制：
   - `max_daily_loss_pct`：當天已實現加未實現虧損達上限，停止開新倉。
   - `max_orders_per_day`：每天最多送單筆數。
   - 緊急停止：建立 `STOP` 檔案（或按下程式的停止鍵）後立即停止開新倉，並依設定選擇是否平掉所有當沖部位。
 
-### 4.1 LINE 通知與確認
+### 4.1 LINE 通知（只通知，不在 LINE 確認）
 
-- 原本的 LINE Notify 已於 2025 年 3 月停止服務，改用 **LINE Messaging API**（自建 LINE 官方帳號機器人），以推播訊息通知。
-- 推播有每月免費則數上限，超過需付費方案；通知內容應精簡（進場、出場、錯誤、每日總結）。
-- **確認送單**：在 LINE 裡按「確認」需要 webhook，也就是你的電腦要有對外可連的網址，設定較複雜。因此規劃分兩步：
-  1. 先做：LINE 只負責通知，確認在本機程式視窗按下。
-  2. 之後：再加 LINE 按鈕確認（需 webhook，例如透過通道服務對外）。
+- 使用 **LINE Messaging API** 推播（LINE Notify 已於 2025 年 3 月停止服務）。
+- **使用者負責**：建立 LINE 官方帳號與 Messaging API channel、加機器人為好友，取得兩個值，設成環境變數或寫進 `trader/.env`（不會提交）：
+  - `LINE_CHANNEL_ACCESS_TOKEN`：Channel access token
+  - `LINE_TO`：接收通知的 LINE 使用者 ID（U 開頭）
+- 程式只負責推播，不需要 webhook，也不接收 LINE 的回覆。
+- 送單確認一律在本機程式視窗按下（`order_confirm: manual`）。
+- 通知項目可個別開關：進場訊號、成交、出場、錯誤、每日總結（`notify.on_*`）。
+- 推播有每月免費則數上限，內容保持精簡。
+
+### 4.2 交易參數的修改與儲存
+
+本規格書中的數值都是**預設值**，使用者可以隨時修改，修改後會保存，下次啟動沿用。
+
+- `trader/defaults.yaml`：預設值（隨程式更新）。
+- `trader/config.yaml`：使用者設定，**只記錄跟預設值不同的項目**，不提交到儲存庫。預設值日後更新時，你沒改過的項目會自動用新的預設值。
+- 每次儲存前整份檢查（型別、範圍、時間先後），不合法就不寫入，並保留上一版為 `config.yaml.bak`。
+- 目前用指令修改；之後的交易程式視窗會有設定頁，使用同一套讀寫與檢查。
+
+```bash
+python -m trader.settings show                                  # 顯示全部設定，標出已修改項目
+python -m trader.settings set daytrade.exit.take_profit_pct 5   # 修改並儲存
+python -m trader.settings reset daytrade.exit.take_profit_pct   # 單項改回預設
+python -m trader.settings reset                                 # 全部改回預設
+```
+
+主要檢查規則：
+- 時間格式 HH:MM；進場開始不早於開盤區間結束；進場開始 < 進場結束 < 強制平倉 ≤ 13:25。
+- 波段停損上限 8%（書中規則）；停損不能不設。
+- 選項類（模式、方向、券商環境、確認方式）只接受列出的值；階段只能是 1～4。
+- 「正式環境 + 全自動免確認」可以設定，但每次修改與啟動都會顯示警告。
 
 ## 5. 價格檔位（台股現股升降單位）
 
@@ -175,7 +200,8 @@ trade = api.Order.create_order(
 
 ```
 trader/
-  config.example.yaml   設定檔範本（使用者複製成 config.yaml，不進版控）
+  defaults.yaml         交易參數預設值
+  settings.py           參數讀取、檢查、儲存（config.yaml 只存修改過的項目，不進版控）
   universe.py           讀 stage_scan.json、篩選、排除不可交易標的
   strategy_daytrade.py  開盤區間突破
   strategy_swing.py     超級績效波段規則
@@ -199,4 +225,3 @@ backtest/               回測
 4. 歷史分 K 資料權限（影響回測）。
 5. 處置股、全額交割股是否能從 `contract()` 或 `TSECreditInfo()` 判斷。
 6. 當沖額度的查詢方式。
-7. LINE 官方帳號（Messaging API）的建立與額度，見第 4.1 節。

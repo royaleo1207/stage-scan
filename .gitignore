@@ -1,2 +1,4 @@
 trader/config.yaml
 __pycache__/
+trader/config.yaml.bak
+trader/.env
