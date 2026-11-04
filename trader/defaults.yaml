@@ -59,6 +59,14 @@ risk:
   max_orders_per_day: 10
   flatten_on_stop: true     # 緊急停止時是否平掉所有當沖部位
 
+costs:                      # 交易成本（回測與模擬下單使用）
+  fee_rate: 0.001425        # 手續費率（法定上限 0.1425%）
+  fee_discount: 1.0         # 手續費折扣，例如 2.8 折填 0.28
+  min_fee: 20               # 每筆最低手續費（元）
+  tax_rate: 0.003           # 一般賣出證交稅 0.3%
+  tax_day_trade: 0.0015     # 現股當沖賣出證交稅 0.15%（優惠稅率，請依最新規定調整）
+  slippage_ticks: 1         # 模擬成交時，市價單多付（少收）幾檔
+
 notify:
   channel: line             # line（LINE 官方帳號機器人推播）或 none（不通知）
   # 金鑰不寫在這裡，請設成環境變數（或寫在 trader/.env，不會提交）：

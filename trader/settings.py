@@ -70,6 +70,12 @@ RANGES = {
     "risk.max_positions": (1, 50),
     "risk.max_daily_loss_pct": (0.1, 50),
     "risk.max_orders_per_day": (1, 1000),
+    "costs.fee_rate": (0, 0.01),
+    "costs.fee_discount": (0, 1),
+    "costs.min_fee": (0, 1000),
+    "costs.tax_rate": (0, 0.01),
+    "costs.tax_day_trade": (0, 0.01),
+    "costs.slippage_ticks": (0, 20),
 }
 
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")

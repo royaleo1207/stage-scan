@@ -1,4 +1,4 @@
-# 台股自動交易規格書（草案 v0.4）
+# 台股自動交易規格書（草案 v0.5）
 
 搭配 `stage_scan.json`（每日 6:30 產生的階段掃描結果），透過凱基 SuperPy 下單。
 兩種模式並存：**波段模式**（依《超級績效》規則）與**當沖模式**（現股當沖，開盤區間突破）。
@@ -200,18 +200,20 @@ trade = api.Order.create_order(
 
 ```
 trader/
-  defaults.yaml         交易參數預設值
-  settings.py           參數讀取、檢查、儲存（config.yaml 只存修改過的項目，不進版控）
-  universe.py           讀 stage_scan.json、篩選、排除不可交易標的
-  strategy_daytrade.py  開盤區間突破
-  strategy_swing.py     超級績效波段規則
-  risk.py               部位大小、每日虧損、緊急停止
-  broker_kgi.py         SuperPy 包裝（登入、報價、下單、查詢、對帳）
-  broker_paper.py       模擬下單（回測、只通知模式用）
-  notifier.py           通知與確認（LINE／Telegram）
+  defaults.yaml         交易參數預設值                       ✅
+  settings.py           參數讀取、檢查、儲存                 ✅
+  twse.py               升降單位、漲跌停、手續費與證交稅     ✅
+  universe.py           讀 stage_scan.json 產生觀察名單      ✅
+  daytrade.py           當沖：開盤區間突破                   ✅
+  swing.py              波段：超級績效規則（日 K 投資組合）  ✅
+  paper_broker.py       程式內模擬下單（介面比照 SuperPy）   ✅
+  data.py               行情資料（yfinance、CSV）            ✅
+  broker_kgi.py         SuperPy 包裝（登入、報價、下單、對帳）
+  notifier.py           LINE 推播
   journal.py            交易日誌
-  main.py               主程式
-backtest/               回測
+  main.py               主程式（盤中執行、本機確認視窗）
+backtest/run.py         回測指令與報告                       ✅
+tests/                  測試                                 ✅
 ```
 
 - 交易程式在使用者自己的 Windows 電腦上執行；帳號、密碼、憑證只放本機，絕不提交到公開儲存庫。
