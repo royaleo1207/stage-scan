@@ -1,7 +1,10 @@
 # 複製成 config.yaml 後修改。config.yaml 含個人設定，不要提交到儲存庫。
 
 mode: daytrade              # daytrade（當沖）或 swing（波段）
-broker: paper               # paper（模擬）或 kgi（凱基 SuperPy 真實下單）
+broker: paper               # paper（程式內模擬）、kgi_sim（凱基模擬環境）、kgi_live（凱基正式環境，真實下單）
+kgi:
+  account: ""               # 證券帳號（依 show_account() 結果填寫；身分證與密碼不寫在這裡，啟動時輸入）
+max_watchlist: 30           # 同時訂閱報價的檔數上限，依帳號等級調整（新星 30、菁英 50、尊爵 100）
 order_confirm: manual       # manual（確認才送單，預設）或 auto（全自動免確認）
 confirm_timeout_sec: 60     # 手動確認逾時秒數，逾時自動取消
 

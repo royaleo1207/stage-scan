@@ -1,4 +1,4 @@
-# 台股自動交易規格書（草案 v0.1）
+# 台股自動交易規格書（草案 v0.2）
 
 搭配 `stage_scan.json`（每日 6:30 產生的階段掃描結果），透過凱基 SuperPy 下單。
 兩種模式並存：**波段模式**（依《超級績效》規則）與**當沖模式**（現股當沖，開盤區間突破）。
@@ -94,7 +94,76 @@
 | 500 ～ 未滿 1000 元 | 1 |
 | 1000 元以上 | 5 |
 
-## 6. 程式架構（規劃）
+## 6. 凱基 SuperPy 對應（依手冊 v1.37 整理）
+
+參考來源：社群維護的 [kgi-superpy-tw](https://github.com/pypysuper-og/kgi-superpy-tw) skill（依凱基 Python API 使用手冊 v1.37 整理，非官方文件）。實際開發時以安裝的 SDK 版本與[官方文件](https://superpy.kgieworld.com.tw/kgipythonapi/index)為準。
+
+### 6.1 啟動流程
+
+1. `api = kgi.login(person_id, person_pwd, simulation=True)`：`True` 是模擬環境（預設），`False` 才是正式環境。程式絕不自動從模擬切換到正式。
+2. `api.show_account()` → 依設定檔指定的證券帳號 `api.set_Account(account)`（不取清單第一個）。
+3. `api.Order.set_event(on_order_event)`：**送任何單之前**先註冊委託回報。
+4. `api.set_disconnect_cb(on_disconnect)`：斷線處理（見 6.6）。
+5. 盤前讀 `api.Order.contract("df")`：取得漲跌停價、參考價、**可否當沖**，用來做第 1 節的排除與第 2.2 節的漲跌停保護。
+6. 收盤後停用自動交易、確認無未結委託，再 `api.logout()`。
+
+### 6.2 報價
+
+- 先設回呼再訂閱：`api.Quote.set_cb_tick(...)`、`set_cb_kbar(...)`、`set_cb_event(...)`。
+- 開盤區間與突破判斷：`api.Quote.subscribe_tick(symbol, odd_lot=False)`；也可用 `subscribe_kbar(symbol, 1)` 取 1 分 K。
+- **訂閱數量有上限**（手冊：新星 2 連線 × 30 檔、菁英 3 × 50、尊爵 9 × 100，以實際權限為準）。因此觀察名單需設 `max_watchlist` 上限，依 RS 排序取前 N 檔。
+- 回呼內只做「放進佇列」，策略運算在另一個執行緒，避免 `CALLBACK_SLOW`、`DROPPED_MESSAGE`。
+- 整股與零股報價分開，不互相替代。
+
+### 6.3 下單
+
+```python
+trade = api.Order.create_order(
+    action=kgi.Action.Buy,            # Buy / Sell
+    symbol="2330",
+    qty=1,                            # 整股：手冊範例顯示為「張」，上線前需實測確認
+    price=612.0,                      # 或 kgi.PriceType.MKT / LimitUp / LimitDown
+    time_in_force=kgi.TimeInForce.ROD,  # ROD / IOC / FOK
+    order_cond=kgi.OrderCond.CASH,    # 現股
+    odd_lot=kgi.OddLot.Common,        # 整股
+    name="dt-orb",                    # 策略代號，方便對帳
+)
+```
+
+| 動作 | 對應（待模擬環境驗證） |
+|---|---|
+| 當沖先買後賣 | 買進 `CASH`，當天賣出 `CASH` |
+| 當沖先賣後買 | 賣出 `CASH_SELLING`（推測為現股當沖賣出），當天買回 `CASH` |
+| 波段買進／賣出 | `CASH` |
+| 改價 | `update_order(order_id, price=...)`（市價單不能改價） |
+| 減量 | `update_order(order_id, qty=N)`：**是減少 N 張，不是改成 N 張** |
+| 刪單 | `cancel_order(order_id)`；緊急停止用 `cancel_order_all()` |
+
+- 手冊回傳物件中另有 `MARGIN_DayTrade`、`SHORT_DayTrade`，但不在下單可用參數內，不使用。
+- `CASH_SELLING` 的確切意義手冊未說明清楚，**先賣後買上線前必須在模擬環境驗證，並向凱基確認**。
+
+### 6.4 委託狀態判讀
+
+- `create_order` 回傳 `Trade` ≠ 委託成功 ≠ 成交。三者分開記錄：
+  - `Task.NewOrder` + `Status.Pending`：系統收到，尚未完成。
+  - `Task.NewOrder` + `Status.Success`：新單成功。
+  - `Task.Deal`：成交（價格、數量）。
+  - `Status.Failed`：失敗，記錄 `msg`。
+- **結果不明時絕不自動重送**，改用 `api.Account.OrderReport()`、`ExecReport()`、`api.Order.get_trades(True)` 對帳，仍不明就通知使用者。
+- 部位以成交回報為準，定時用 `api.Order.get_position()`、`api.Account.InventorySum("A")` 核對。
+
+### 6.5 回測資料
+
+- 日 K：`api.Data.get("還原日K價量資料(個股、ETF、大盤)-單檔股票多個區間", symbol)`。
+- 分 K：`取得歷史分K(指定日期前)`、`取得歷史1分K(指定日期前5天)` 等；手冊有使用者遇到歷史分 K 權限被拒（`D403`），需先確認帳號權限。
+- 可用 SDK 內建 `api.backtest(...)`（台股當沖稅率預設 0.0015、手續費 0.00025），或自行撰寫回測。
+
+### 6.6 斷線恢復
+
+重新登入不等於恢復完成。恢復時依序：重新 `set_Account` → 重新註冊委託回報 → 重新訂閱報價 → 對帳委託、成交、庫存 → 確認報價時間是新的 → 才恢復策略。斷線期間不開新倉；對帳有差異就停止並通知使用者。
+
+## 7. 程式架構（規劃）
+
 
 ```
 trader/
@@ -103,7 +172,7 @@ trader/
   strategy_daytrade.py  開盤區間突破
   strategy_swing.py     超級績效波段規則
   risk.py               部位大小、每日虧損、緊急停止
-  broker_kgi.py         SuperPy 包裝（登入、報價、下單、查詢）← 需 API 文件
+  broker_kgi.py         SuperPy 包裝（登入、報價、下單、查詢、對帳）
   broker_paper.py       模擬下單（回測、只通知模式用）
   notifier.py           通知與確認（LINE／Telegram）
   journal.py            交易日誌
@@ -114,10 +183,12 @@ backtest/               回測
 - 交易程式在使用者自己的 Windows 電腦上執行；帳號、密碼、憑證只放本機，絕不提交到公開儲存庫。
 - `broker_paper.py` 與 `broker_kgi.py` 介面相同，切換只改設定。
 
-## 7. 待確認事項
+## 8. 待確認事項（需在模擬環境驗證或向凱基詢問）
 
-1. SuperPy 的函式：登入、憑證、即時報價訂閱、現股與當沖下單（含先賣後買的委託條件）、改單、刪單、委託與成交回報、庫存查詢。
-2. 是否提供「可否當沖」「處置股」「漲跌停價」的資料，或需要另外取得。
-3. 零股能否當沖。
-4. 當沖額度的查詢方式。
-5. 確認通知要用 LINE 還是 Telegram。
+1. 先賣後買是否使用 `OrderCond.CASH_SELLING`。
+2. 整股 `qty` 的單位是否為「張」（手冊範例支持，但未明文保證）。
+3. 你的帳號等級可訂閱幾檔報價（決定 `max_watchlist`）。
+4. 歷史分 K 資料權限（影響回測）。
+5. 處置股、全額交割股是否能從 `contract()` 或 `TSECreditInfo()` 判斷。
+6. 當沖額度的查詢方式。
+7. 確認通知要用 LINE 還是 Telegram。
