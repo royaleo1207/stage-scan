@@ -1,0 +1,55 @@
+# 複製成 config.yaml 後修改。config.yaml 含個人設定，不要提交到儲存庫。
+
+mode: daytrade              # daytrade（當沖）或 swing（波段）
+broker: paper               # paper（模擬）或 kgi（凱基 SuperPy 真實下單）
+order_confirm: manual       # manual（確認才送單，預設）或 auto（全自動免確認）
+confirm_timeout_sec: 60     # 手動確認逾時秒數，逾時自動取消
+
+capital: 1000000            # 總資金（元）
+
+universe:
+  stages: [2]               # 要交易的階段，例如 [2]、[4]、[1, 2]
+  trend_template: true      # 是否要求趨勢樣板八項全過
+  min_rs: 70                # RS 最低門檻
+  min_avg_volume_lots: 1000 # 50 日均量最少幾張
+
+daytrade:
+  direction: long           # long（先買後賣）或 short（先賣後買）
+  opening_range_minutes: 15 # 開盤區間長度（分鐘）
+  min_range_pct: 0.8        # 開盤區間寬度下限 %
+  max_range_pct: 4.0        # 開盤區間寬度上限 %
+  or_volume_ratio: 0.15     # 開盤區間累計量 ≥ 50 日均量 × 此值（0 表示不檢查）
+  limit_buffer_pct: 1.5     # 距漲跌停不足此 % 不進場
+  entry:
+    start: "09:15"          # 最早進場時間
+    end: "10:30"            # 最晚進場時間
+  exit:
+    stop_loss_pct: 2.0      # 停損 %（與開盤區間另一端取較近者）
+    take_profit_pct: 4.0    # 停利 %，留空表示不設
+    force_close: "13:15"    # 強制平倉時間
+  max_amount_per_trade: 300000  # 單筆金額上限（元），例如 30 萬
+  max_entries_per_symbol: 1
+
+swing:
+  max_contraction: 0.8
+  max_vol_ratio: 1.0
+  pivot_lookback: 20
+  breakout_volume_ratio: 1.4
+  max_chase_pct: 5.0
+  entry_timing: intraday    # intraday（盤中突破）或 next_open（隔天開盤）
+  stop_loss_pct: 7.0        # 上限 8
+  breakeven_r: 2.0
+  ma_break_volume_ratio: 1.0
+  partial_take_pct: 20.0    # 留空表示不分批
+  partial_take_size: 0.5
+  max_position_pct: 25.0
+
+risk:
+  risk_per_trade_pct: 1.0
+  max_positions: 3
+  max_daily_loss_pct: 3.0
+  max_orders_per_day: 10
+  flatten_on_stop: true     # 緊急停止時是否平掉所有當沖部位
+
+notify:
+  channel: telegram         # telegram 或 line
