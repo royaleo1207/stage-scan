@@ -13,7 +13,7 @@ max_watchlist: 30           # 同時訂閱報價的檔數上限，依帳號等�
 order_confirm: manual       # manual（確認才送單，預設）或 auto（全自動免確認）
 confirm_timeout_sec: 60     # 本機視窗確認的逾時秒數，逾時自動取消
 
-capital: 1000000            # 總資金（元）
+capital: 5000000            # 總資金（元），預設 500 萬
 
 universe:
   stages: [2]               # 要交易的階段，例如 [2]、[4]、[1, 2]
@@ -51,6 +51,7 @@ swing:
   partial_take_pct: 20.0    # 留空表示不分批
   partial_take_size: 0.5
   max_position_pct: 25.0
+  lot_mode: lot             # lot（只買整張）或 odd（允許零股：整張部分下整股單，不足一張下盤中零股單）
 
 risk:
   risk_per_trade_pct: 1.0

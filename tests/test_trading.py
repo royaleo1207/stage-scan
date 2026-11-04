@@ -164,6 +164,19 @@ def test_swing_breakout_partial_and_exit():
     assert t["pnl"] > 0                                        # 分批獲利 20% 後保本出場
 
 
+def test_swing_odd_lot():
+    pricey = swing_data()
+    pricey[["open", "high", "low", "close"]] *= 15           # 股價約 1000 元以上
+    lot = swing.run({"A": pricey}, cfg(capital=1_000_000))
+    assert lot["trades"].empty and lot["skipped"].get("資金不足一張")
+    odd = swing.run({"A": pricey}, cfg(capital=1_000_000, swing__lot_mode="odd"))
+    t = odd["trades"].iloc[0]
+    assert 0 < t["shares"] < 1000                             # 買零股
+    risk = (t["entry"] - t["init_stop"]) * t["shares"]
+    assert risk <= 1_000_000 * 0.01                           # 單筆風險不超過 1%
+    assert t["shares"] * t["entry"] <= 1_000_000 * 0.25       # 單一個股不超過 25%
+
+
 def test_backtest_cli_csv():
     from backtest import run as R
     d = Path(tempfile.mkdtemp())

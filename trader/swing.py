@@ -90,10 +90,17 @@ def run(data: dict[str, pd.DataFrame], cfg: dict, start: str | None = None) -> d
         i = df.index.searchsorted(d) - 1
         return df.iloc[i] if i >= 0 else None
 
+    unit = 1 if sw["lot_mode"] == "odd" else 1000   # 零股模式以「股」為單位
+
+    def fee(px, shares, side):
+        # 零股模式：整張部分下整股單、不足一張部分下盤中零股單，兩筆各自計費
+        lot_sh, odd_sh = (shares // 1000) * 1000, shares % 1000
+        return sum(twse.trade_cost(px * n, side, costs, False) for n in (lot_sh, odd_sh) if n)
+
     def sell(p: Position, d, px, shares, reason):
         nonlocal cash
         amt = px * shares
-        cost = twse.trade_cost(amt, "sell", costs, False)
+        cost = fee(px, shares, "sell")
         cash += amt - cost
         p.cost += cost
         p.realized += (px - p.entry) * shares
@@ -124,8 +131,7 @@ def run(data: dict[str, pd.DataFrame], cfg: dict, start: str | None = None) -> d
             if sw["partial_take_pct"] is not None and not p.partial_done:
                 tgt = twse.round_to_tick(p.entry * (1 + sw["partial_take_pct"] / 100), "up")
                 if h >= tgt:
-                    lots = p.shares // 1000
-                    n = int(lots * sw["partial_take_size"]) * 1000
+                    n = int(p.shares // unit * sw["partial_take_size"]) * unit
                     if n > 0:
                         sell(p, d, max(o, tgt), n, "分批獲利")
                     p.partial_done = True
@@ -180,20 +186,19 @@ def run(data: dict[str, pd.DataFrame], cfg: dict, start: str | None = None) -> d
             eq = cash + sum(p.shares * float(bar(q, d)["close"] if bar(q, d) is not None else p.entry)
                             for q, p in pos.items())
             stop = twse.round_to_tick(px * (1 - sw["stop_loss_pct"] / 100), "up")
-            risk_lots = eq * rk["risk_per_trade_pct"] / 100 / ((px - stop) * 1000)
-            cap_lots = eq * sw["max_position_pct"] / 100 / (px * 1000)
-            lots = int(min(risk_lots, cap_lots))
-            cost_est = px * lots * 1000 * (1 + costs["fee_rate"])
-            while lots >= 1 and cost_est > cash:
-                lots -= 1
-                cost_est = px * lots * 1000 * (1 + costs["fee_rate"])
-            if lots < 1:
-                skipped["資金不足一張"] = skipped.get("資金不足一張", 0) + 1
+            risk_units = eq * rk["risk_per_trade_pct"] / 100 / ((px - stop) * unit)
+            cap_units = eq * sw["max_position_pct"] / 100 / (px * unit)
+            n = int(min(risk_units, cap_units))
+            while n >= 1 and px * n * unit + fee(px, n * unit, "buy") > cash:
+                n -= 1
+            if n < 1:
+                reason = "資金不足一股" if unit == 1 else "資金不足一張"
+                skipped[reason] = skipped.get(reason, 0) + 1
                 continue
-            shares = lots * 1000
-            fee = twse.trade_cost(px * shares, "buy", costs, False)
-            cash -= px * shares + fee
-            pos[s] = Position(s, d.strftime("%Y-%m-%d"), px, shares, stop, stop, cost=fee, orig_shares=shares)
+            shares = n * unit
+            f = fee(px, shares, "buy")
+            cash -= px * shares + f
+            pos[s] = Position(s, d.strftime("%Y-%m-%d"), px, shares, stop, stop, cost=f, orig_shares=shares)
 
         mv = sum(p.shares * float(bar(q, d)["close"]) for q, p in pos.items() if bar(q, d) is not None)
         equity.append((d, cash + mv))

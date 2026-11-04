@@ -36,6 +36,7 @@ CHOICES = {
     "order_confirm": {"manual", "auto"},
     "daytrade.direction": {"long", "short"},
     "swing.entry_timing": {"intraday", "next_open"},
+    "swing.lot_mode": {"lot", "odd"},
     "notify.channel": {"line", "none"},
 }
 
