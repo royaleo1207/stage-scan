@@ -560,6 +560,7 @@ def test_dry_run_logs_in_live_but_never_sends():
     plan(e, tw(qty=1, price=100.0, exit={"stop_loss": {"type": "pct", "value": 2}}),
          tw(symbol="2317", price_type="MKT", price=None, tif="IOC"))
     api.Quote.push("2330", 99.5)                      # 限價 100 成交於 99.5
+    assert ("2317", False) in api.Quote.subs           # 沒加出場規則也要訂閱，否則本機無法模擬成交
     api.Quote.push("2317", 101.0)                     # 市價單以下一筆成交
     p = [x for x in e.d["positions"].values() if x["symbol"] == "2330"][0]
     assert p["avg"] == 99.5 and p["shares"] == 1000
@@ -568,6 +569,7 @@ def test_dry_run_logs_in_live_but_never_sends():
     assert e.d["positions"][p["id"]]["status"] == "closed"
     clock.set("2026-11-10T23:00:00")
     plan(e, us(qty=2, price=200.0))
+    assert ("AAPL", False) in api.USQuote.subs
     api.USQuote.push("AAPL", 199.0)
     assert api.Order.calls == [] and api.SubOrder.calls == []     # 從未送到凱基
     assert any(x["symbol"] == "AAPL" and x["status"] == "open" for x in e.d["positions"].values())

@@ -349,6 +349,10 @@ class Engine:
                  order=o["id"], spec=o["spec"], role=o["role"])
         if o["role"] == "entry" and o.get("rules"):
             self.broker.subscribe(spec.market, spec.symbol, exit_unit(spec.unit) == "odd")
+        local = getattr(self.broker, "_local", None)
+        if local and local(spec.market):
+            # 本機模擬成交需要這檔（同單位）的即時行情，沒加出場規則也要訂閱
+            self.broker.subscribe(spec.market, spec.symbol, spec.unit in ("odd", "odd_after"))
         return {"ok": True, "local_id": o["id"], "reason": o["msg"]}
 
     def cancel_order(self, oid: str, why: str = "使用者取消") -> tuple[bool, str]:
