@@ -336,7 +336,7 @@ dialog::backdrop{background:rgba(10,15,20,.5)}
         <span><i class="dot" id="connDot"></i><b>本機下單程式</b>　<span class="modetag off" id="connMode">未連線</span></span>
         <label>配對碼 <input id="pairCode" inputmode="numeric" autocomplete="off" maxlength="12" aria-label="配對碼"></label>
         <button class="btn" type="button" id="btnConn">連線</button>
-        <span class="msg" id="connMsg">在 Windows 執行 <code>python -m trader.order_server</code>，把終端機顯示的配對碼填進來。未連線時仍可編輯與匯出計畫 JSON。</span>
+        <span class="msg" id="connMsg">在 Windows 執行 <code>python -m trader.order_server</code>（或 <code>--dry-run</code> 演練、<code>--live</code> 正式），把終端機顯示的配對碼填進來。未連線時仍可編輯與匯出計畫 JSON。</span>
       </div>
       <div class="ocards" id="orderCards"></div>
       <div class="oacts">
@@ -643,6 +643,7 @@ const UNITS = ["common","odd","odd_after","fixing","shares"];
 const PTS = ["LMT","MKT","RANGE_MKT","LIMIT_UP","LIMIT_DOWN","REFERENCE"];
 const TIFS = ["ROD","IOC","FOK"];
 const ord = {items:[], conn:null, inv:null, seq:0};
+const MODE_TXT = {live:"正式模式（真實下單）", simulation:"模擬模式", dry_run:"演練模式（不送單）"};
 const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
 const lsSet = (k, v) => { try{ localStorage.setItem(k, v); }catch(e){} };
 const ssGet = k => { try{ return sessionStorage.getItem(k); }catch(e){ return null; } };
@@ -913,7 +914,7 @@ function setConn(c, msg){
   ord.conn = c;
   $("connDot").className = "dot" + (c ? (c.mode === "live" ? " live" : " ok") : "");
   $("connMode").className = "modetag " + (c ? (c.mode === "live" ? "live" : "sim") : "off");
-  $("connMode").textContent = c ? (c.mode === "live" ? "正式模式（真實下單）" : "模擬模式") : "未連線";
+  $("connMode").textContent = c ? MODE_TXT[c.mode] || c.mode : "未連線";
   $("connMsg").textContent = msg;
 }
 async function connect(){
@@ -924,7 +925,7 @@ async function connect(){
     await tfetch("/api/state");          // 驗證配對碼
     try{ CAPS = await (await fetch(TRADER + "/api/capabilities")).json(); }catch(e){ CAPS = CAPS0; }
     const a = ping.accounts;
-    setConn(ping, `已連線。台股帳號：${a.tw ? "已設定" : "未設定"}；美股：${a.us ? (a.us_local_sim ? "本機模擬（凱基無複委託模擬環境）" : "複委託已設定") : "未設定（無法下美股）"}。單筆上限 ${fmtN(ping.limits.max_order_amount)} 元。`);
+    setConn(ping, `已連線。${ping.mode === "dry_run" ? "演練模式：以正式帳號讀取真實行情與庫存，委託只在本機模擬成交，不會送到凱基。" : ""}台股帳號：${a.tw ? "已設定" : "未設定"}；美股：${a.us ? (a.us_local_sim ? "本機模擬（凱基無複委託模擬環境）" : "複委託已設定") : "未設定（無法下美股）"}。單筆上限 ${fmtN(ping.limits.max_order_amount)} 元。`);
     renderOrders();
   }catch(e){
     setConn(null, e.message === "Failed to fetch" ? "連不到 http://127.0.0.1:8765。請確認下單程式已啟動；Safari 不允許網頁連本機，請改用 Chrome 或 Edge。" : "連線失敗：" + e.message);
@@ -988,7 +989,9 @@ $("btnReview").addEventListener("click", async () => {
   const lim = ord.conn?.limits;
   const over = lim ? ord.items.filter(i => i.kind === "order" && sideOf(i) && (twd(i) || 0) > lim.max_order_amount) : [];
   $("dlgMode").innerHTML = !ord.conn ? `<span class="modetag off">未連線</span>　無法送出，請先連線或改用「匯出計畫 JSON」。`
-    : live ? `<div class="livewarn">正式模式：送出後會用真實資金下單</div>` : `<span class="modetag sim">模擬模式</span>　凱基模擬環境${ord.items.some(i => i.market === "US") ? "；美股為本機模擬成交" : ""}`;
+    : live ? `<div class="livewarn">正式模式：送出後會用真實資金下單</div>`
+    : ord.conn.mode === "dry_run" ? `<span class="modetag sim">演練模式</span>　正式帳號的真實行情，委託只在本機模擬成交，不會送到凱基`
+    : `<span class="modetag sim">模擬模式</span>　凱基模擬環境${ord.items.some(i => i.market === "US") ? "；美股為本機模擬成交" : ""}`;
   $("dlgBody").innerHTML = `<ol>${ord.items.map(i => `<li>${describe(i)}</li>`).join("")}</ol>
     <p class="sum">合計預估：台股約 <b>${fmtN(tw)}</b> 元${usd ? `、美股約 <b>${fmtN(usd)}</b> 美元（約 ${fmtN(usd * fx())} 台幣）` : ""}（市價、漲跌停以參考價 ±10% 估算）。</p>
     ${over.length ? `<p class="errs">以下委託超過單筆金額上限 ${fmtN(lim.max_order_amount)} 元，下單程式會拒絕：${over.map(i => esc(i.symbol)).join("、")}</p>` : ""}`;

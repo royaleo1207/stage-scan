@@ -96,7 +96,7 @@ function rules(r){
   ].filter(Boolean).join("、");
 }
 function render(s){
-  $("mode").textContent = s.mode === "live" ? "正式環境" : "模擬環境";
+  $("mode").textContent = {live:"正式環境", simulation:"模擬環境", dry_run:"演練（不送單）"}[s.mode] || s.mode;
   $("mode").className = "mode " + (s.mode === "live" ? "live" : "sim");
   const d = s.day, L = s.limits;
   $("halt").classList.toggle("hidden", !d.halted);
@@ -107,7 +107,7 @@ function render(s){
     ["今日新委託金額", `<b>${n0(d.amount)}</b>`, `上限 ${n0(L.max_daily_amount)}，單筆 ${n0(L.max_order_amount)}`],
     ["空方部位", `<b>${n0(s.short_exposure)}</b>`, `上限 ${n0(L.max_short_amount)}`],
     ["今日委託筆數", `<b>${d.orders}</b>`, `上限 ${L.max_orders_per_day}`],
-    ["帳號", `<b style="font-size:14px">台股 ${s.accounts.tw ? "✓" : "✕"}　美股 ${s.accounts.us ? (s.accounts.us_local_sim ? "本機模擬" : "✓") : "✕"}</b>`,
+    ["帳號", `<b style="font-size:14px">台股 ${s.accounts.tw ? (s.accounts.tw_local_sim ? "本機模擬" : "✓") : "✕"}　美股 ${s.accounts.us ? (s.accounts.us_local_sim ? "本機模擬" : "✓") : "✕"}</b>`,
       `美股${s.us_dst ? "夏令" : "冬令"}時間，當沖平倉 ${s.us_flatten_tpe}（台北）`]
   ].map(([a,b,c]) => `<div class="card"><span>${a}</span>${b}<span>${esc(c)}</span></div>`).join("");
 

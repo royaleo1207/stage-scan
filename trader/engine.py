@@ -49,6 +49,7 @@ class Engine:
         self.broker, self.store = broker, store
         self.cfg = _deep_merge(DEFAULT_CFG, cfg or {})
         self.live = live
+        self.dry_run = bool(getattr(broker, "dry_run", False)) and not live   # 演練：正式登入、本機成交
         self.now = clock or mh.now_tpe
         self.holidays = holidays
         self.risk = RiskManager(RiskLimits.from_cfg(self.cfg["risk"]))
@@ -63,7 +64,7 @@ class Engine:
 
     @property
     def mode(self) -> str:
-        return "live" if self.live else "simulation"
+        return "live" if self.live else ("dry_run" if self.dry_run else "simulation")
 
     def log(self, kind: str, msg: str, **extra) -> None:
         self.store.log(kind, msg, **extra)
@@ -81,7 +82,7 @@ class Engine:
         return f"{market}:{symbol}:{int(odd)}"
 
     def _check_hours(self) -> bool:
-        return self.live or self.cfg["enforce_hours_in_simulation"]
+        return self.live or self.dry_run or self.cfg["enforce_hours_in_simulation"]
 
     def _can_order_now(self, spec: OrderSpec) -> tuple[bool, str]:
         if spec.market == "TW":
@@ -93,8 +94,9 @@ class Engine:
         with self.lock:
             exp = plan.get("expected_mode")
             if exp and exp != self.mode:
-                return {"ok": False, "error": f"網頁確認的是「{'正式' if exp == 'live' else '模擬'}」模式，"
-                                              f"下單程式目前是「{'正式' if self.live else '模擬'}」模式，整份計畫未執行"}
+                nm = {"live": "正式", "simulation": "模擬", "dry_run": "演練"}
+                return {"ok": False, "error": f"網頁確認的是「{nm.get(exp, exp)}」模式，"
+                                              f"下單程式目前是「{nm[self.mode]}」模式，整份計畫未執行"}
             items = plan.get("items")
             if not isinstance(items, list) or not items:
                 return {"ok": False, "error": "計畫沒有任何委託"}
@@ -737,6 +739,10 @@ class Engine:
         with self.lock:
             for o in self.d["orders"].values():
                 if o["status"] in ("sending", "submitted", "partial"):
+                    if str(o.get("order_id") or "").startswith("SIM"):
+                        o["status"], o["msg"] = "cancelled", "本機模擬委託，下單程式重啟後失效"
+                        notes.append(f"{o['id']} {o['spec']['symbol']}：{o['msg']}")
+                        continue
                     info = self.broker.reattach(o["id"], o["market"], o.get("order_id") or o.get("org_seqnum"))
                     if info is None:
                         o["status"], o["msg"] = "unknown", "重啟後找不到這筆委託，請到券商軟體對帳"
@@ -773,7 +779,8 @@ class Engine:
                 "limits": self.risk.limits.__dict__, "short_exposure": round(self.short_exposure(), 0),
                 "orders": orders, "positions": pos, "fills": self.d["fills"][-200:][::-1],
                 "accounts": {"tw": bool(self.broker.has_tw), "us": bool(self.broker.has_us),
-                             "us_local_sim": bool(getattr(self.broker, "us_is_local_sim", False))},
+                             "us_local_sim": bool(getattr(self.broker, "us_is_local_sim", False)),
+                             "tw_local_sim": bool(getattr(self.broker, "tw_is_local_sim", False))},
                 "us_dst": mh.utc_offset_hours("US", self.now()) == -4,
                 "us_flatten_tpe": mh.us_flatten_time(self.now()).astimezone(mh.TPE).strftime("%H:%M"),
                 "log": self.store.tail_log(150)[::-1],

@@ -18,7 +18,8 @@ engine 只透過這裡呼叫券商，方便用 mock 物件測試。對應的 SDK
 - 庫存：api.SubAccount.StockPositionReport() → symbol、Qty、market_price
 - 行情：api.USQuote.set_cb_tick(cb)、api.USQuote.subscribe_tick(symbol)
 
-凱基手冊明載複委託沒有模擬環境，所以模擬模式下美股改用本機模擬成交（UsLocalSim），不送到券商。
+凱基手冊明載複委託沒有模擬環境，所以模擬模式下美股改用本機模擬成交（LocalSim），不送到券商。
+演練模式（dry_run=True）用正式環境登入，讀真實行情、庫存與商品資料，但台股與美股委託都只在本機模擬成交。
 """
 
 from __future__ import annotations
@@ -65,11 +66,13 @@ class BrokerError(RuntimeError):
 class KgiBroker:
     """真實 SuperPy（模擬或正式環境）。"""
 
-    def __init__(self, kgi_module: Any = None, simulation: bool = True, log: Callable[..., Any] | None = None):
+    def __init__(self, kgi_module: Any = None, simulation: bool = True, log: Callable[..., Any] | None = None,
+                 dry_run: bool = False):
         if kgi_module is None:
             import kgisuperpy as kgi_module  # noqa: N813  Windows 上安裝 kgisuperpy 後才有
         self.kgi = kgi_module
         self.simulation = simulation
+        self.dry_run = dry_run and not simulation
         self.api = None
         self.tw_account = None
         self.us_account = None
@@ -81,7 +84,7 @@ class KgiBroker:
         self._subs: set[tuple[str, str, bool]] = set()
         self._tw_contracts = None
         self._us_contracts = None
-        self.us_sim: UsLocalSim | None = None
+        self.sim: LocalSim | None = None
         # 凱基測試說明要求模擬環境的下單間隔大於 1 秒；正式環境預設不限制
         self.min_interval = 1.1 if simulation else 0.0
         self._last_place = 0.0
@@ -113,11 +116,11 @@ class KgiBroker:
         if self.tw_account:
             self.api.set_Account(self.tw_account)
             self.api.Order.set_event(lambda ev: self._sdk_event("TW", ev))
-        if self.us_account and not self.simulation:
+        if self.us_account and not self.simulation:   # 演練模式也設定，用來讀商品檔與庫存
             self.api.set_SubAccount(self.us_account)
             self.api.SubOrder.set_event(lambda ev: self._sdk_event("US", ev))
-        if self.simulation:
-            self.us_sim = UsLocalSim(lambda e: self._on_event(e))
+        if self.simulation or self.dry_run:
+            self.sim = LocalSim(lambda e: self._on_event(e))
         if hasattr(self.api, "Quote"):
             self.api.Quote.set_cb_tick(self._tw_tick)
         if hasattr(self.api, "USQuote"):
@@ -136,11 +139,18 @@ class KgiBroker:
 
     @property
     def has_us(self) -> bool:
-        return bool(self.us_account) or self.us_sim is not None
+        return bool(self.us_account) or self.simulation
 
     @property
     def us_is_local_sim(self) -> bool:
-        return self.simulation
+        return self.simulation or self.dry_run
+
+    @property
+    def tw_is_local_sim(self) -> bool:
+        return self.dry_run
+
+    def _local(self, market: str) -> bool:
+        return self.dry_run or (market == "US" and self.simulation)
 
     def set_handlers(self, on_event, on_tick):
         self._on_event, self._on_tick = on_event, on_tick
@@ -203,7 +213,7 @@ class KgiBroker:
 
     def us_inventory(self) -> list[dict]:
         if self.simulation:
-            return self.us_sim.inventory() if self.us_sim else []
+            return self.sim.inventory() if self.sim else []
         out = []
         for r in _rows(self.api.SubAccount.StockPositionReport()):
             q = int(_num(r.get("Qty"), 0))
@@ -234,17 +244,18 @@ class KgiBroker:
         self._last_place = time.monotonic()
 
     def place(self, local_id: str, spec: OrderSpec) -> tuple[bool, str]:
-        if not (spec.market == "US" and self.simulation):
-            self._throttle()
+        if self._local(spec.market):
+            if spec.market == "TW" and not self.has_tw:
+                return False, "未設定證券帳號（KGI_TW_ACCOUNT）"
+            self.sim.place(local_id, spec)
+            return True, ("演練：本機模擬委託，未送到凱基" if self.dry_run else "美股本機模擬委託（凱基無複委託模擬環境）")
+        self._throttle()
         try:
             if spec.market == "TW":
                 if not self.has_tw:
                     return False, "未設定證券帳號（KGI_TW_ACCOUNT）"
                 trade = self.api.Order.create_order(**self._tw_args(spec), name=local_id[-10:])
             else:
-                if self.simulation:
-                    self.us_sim.place(local_id, spec)
-                    return True, "美股本機模擬委託（凱基無複委託模擬環境）"
                 if not self.us_account:
                     return False, "未設定複委託帳號（KGI_US_ACCOUNT）"
                 c = self.us_contract(spec.symbol)
@@ -262,8 +273,8 @@ class KgiBroker:
     def cancel(self, local_id: str) -> tuple[bool, str]:
         with self._lock:
             rec = self._trades.get(local_id)
-        if self.us_sim and self.us_sim.has(local_id):
-            return self.us_sim.cancel(local_id)
+        if self.sim and self.sim.has(local_id):
+            return self.sim.cancel(local_id)
         if rec is None:
             return False, "找不到這筆委託（可能是重啟前送出的委託，請到券商軟體刪單）"
         market, trade = rec
@@ -324,15 +335,18 @@ class KgiBroker:
         t = args[-1]
         price = _num(getattr(t, "close", None), None)
         if price:
-            self._on_tick("TW", str(t.symbol), bool(getattr(t, "odd_lot", False)), price, str(getattr(t, "datetime", "")))
+            sym, odd = str(t.symbol), bool(getattr(t, "odd_lot", False))
+            if self.dry_run and self.sim:
+                self.sim.on_tick("TW", sym, odd, price)
+            self._on_tick("TW", sym, odd, price, str(getattr(t, "datetime", "")))
 
     def _us_tick(self, *args) -> None:
         t = args[-1]
         price = _num(getattr(t, "close", None), None)
         if price:
             sym = str(t.symbol).split(".")[0]
-            if self.us_sim:
-                self.us_sim.on_tick(sym, price)
+            if self.sim:
+                self.sim.on_tick("US", sym, False, price)
             self._on_tick("US", sym, False, price, str(getattr(t, "datetime", "")))
 
     # ── 回報 ──
@@ -381,52 +395,69 @@ class KgiBroker:
             self._log("error", f"處理回報失敗：{e}")
 
 
-class UsLocalSim:
-    """模擬模式的美股：限價單在即時價穿越限價時成交（凱基沒有複委託模擬環境）。"""
+class LocalSim:
+    """本機模擬成交（不送券商）：
+    - 模擬模式的美股（凱基沒有複委託模擬環境）
+    - 演練模式（--dry-run）的台股與美股：用正式帳號登入讀真實行情，但委託只在本機成交
+    規則：限價單在最新價穿越限價時以限價成交（價格更有利則用最新價）；市價、漲停、跌停、平盤單以下一筆最新價成交；
+    IOC／FOK 限價單若當下無法成交就取消。不模擬部分成交、排隊與漲跌停鎖死，結果會比實際樂觀。
+    """
 
     def __init__(self, emit: Callable[[dict], None]):
         self.emit = emit
         self.orders: dict[str, dict] = {}
         self.pos: dict[str, int] = {}
-        self.last: dict[str, float] = {}
+        self.last: dict[tuple, float] = {}
         self._ids = itertools.count(1)
+
+    @staticmethod
+    def _key(spec: OrderSpec) -> tuple:
+        return (spec.market, spec.symbol, spec.unit in ("odd", "odd_after"))
 
     def has(self, lid: str) -> bool:
         return lid in self.orders
 
     def place(self, lid: str, spec: OrderSpec) -> None:
-        self.orders[lid] = {"spec": spec, "open": True, "oid": f"USIM{next(self._ids):05d}"}
-        self.emit({"local_id": lid, "market": "US", "kind": "ack", "task": "NewOrder", "status": "Success",
+        self.orders[lid] = {"spec": spec, "open": True, "oid": f"SIM{next(self._ids):05d}"}
+        self.emit({"local_id": lid, "market": spec.market, "kind": "ack", "task": "NewOrder", "status": "Success",
                    "order_id": self.orders[lid]["oid"], "qty": spec.qty, "price": spec.price, "msg": "本機模擬"})
-        if spec.symbol in self.last:
-            self._try(lid, self.last[spec.symbol])
+        k = self._key(spec)
+        if k in self.last:
+            self._try(lid, self.last[k])
+        if self.orders[lid]["open"] and spec.tif in ("IOC", "FOK") and spec.price_type == "LMT":
+            self.cancel(lid)
 
     def cancel(self, lid: str) -> tuple[bool, str]:
         o = self.orders.get(lid)
         if not o or not o["open"]:
             return False, "委託已成交或已取消"
         o["open"] = False
-        self.emit({"local_id": lid, "market": "US", "kind": "cancelled", "task": "CancelOrder",
+        self.emit({"local_id": lid, "market": o["spec"].market, "kind": "cancelled", "task": "CancelOrder",
                    "status": "Success", "qty": 0, "price": None, "msg": "本機模擬"})
         return True, ""
 
-    def on_tick(self, sym: str, price: float) -> None:
-        self.last[sym] = price
+    def on_tick(self, market: str, sym: str, odd: bool, price: float) -> None:
+        self.last[(market, sym, odd)] = price
         for lid, o in list(self.orders.items()):
-            if o["open"] and o["spec"].symbol == sym:
+            if o["open"] and self._key(o["spec"]) == (market, sym, odd):
                 self._try(lid, price)
 
     def _try(self, lid: str, price: float) -> None:
         o = self.orders[lid]
         s = o["spec"]
-        if (s.action == "Buy" and price <= s.price) or (s.action == "Sell" and price >= s.price):
-            o["open"] = False
+        if s.price_type != "LMT":
+            fill = price
+        elif (s.action == "Buy" and price <= s.price) or (s.action == "Sell" and price >= s.price):
             fill = min(price, s.price) if s.action == "Buy" else max(price, s.price)
+        else:
+            return
+        o["open"] = False
+        if s.market == "US":
             self.pos[s.symbol] = self.pos.get(s.symbol, 0) + (s.qty if s.action == "Buy" else -s.qty)
-            self.emit({"local_id": lid, "market": "US", "kind": "deal", "task": "Deal", "status": "",
-                       "order_id": o["oid"], "qty": s.qty, "price": fill, "msg": "本機模擬成交",
-                       "ts": datetime.now().isoformat(timespec="seconds")})
+        self.emit({"local_id": lid, "market": s.market, "kind": "deal", "task": "Deal", "status": "",
+                   "order_id": o["oid"], "qty": s.qty, "price": fill, "msg": "本機模擬成交",
+                   "ts": datetime.now().isoformat(timespec="seconds")})
 
     def inventory(self) -> list[dict]:
         return [{"market": "US", "symbol": s, "name": "", "kind": "cash", "shares": q, "avg": None,
-                 "last": self.last.get(s)} for s, q in self.pos.items() if q > 0]
+                 "last": self.last.get(("US", s, False))} for s, q in self.pos.items() if q > 0]

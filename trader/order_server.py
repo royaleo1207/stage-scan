@@ -2,6 +2,7 @@
 
 啟動（Windows 命令提示字元，在專案資料夾）：
     python -m trader.order_server            模擬環境（預設，simulation=True）
+    python -m trader.order_server --dry-run  演練：用正式帳號登入讀真實行情與庫存，但委託只在本機模擬成交
     python -m trader.order_server --live     正式環境，啟動時需輸入 YES 確認
 
 - 只綁定 127.0.0.1:8765，外部電腦連不到。
@@ -153,7 +154,8 @@ def make_handler(engine: eng.Engine, pair_code: str, allowed_origins: list[str])
                 if self._guard(need_auth=False):
                     self._json(200, {"ok": True, "app": "stage-scan-trader", "mode": engine.mode,
                                      "accounts": {"tw": engine.broker.has_tw, "us": engine.broker.has_us,
-                                                  "us_local_sim": bool(getattr(engine.broker, "us_is_local_sim", False))},
+                                                  "us_local_sim": bool(getattr(engine.broker, "us_is_local_sim", False)),
+                                                  "tw_local_sim": bool(getattr(engine.broker, "tw_is_local_sim", False))},
                                      "limits": engine.risk.limits.__dict__})
                 return
             if path == "/api/capabilities":
@@ -207,8 +209,13 @@ def confirm_live(inp=input, out=print) -> bool:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="階段掃描本機下單程式（凱基 SuperPy）")
     ap.add_argument("--live", action="store_true", help="正式環境（預設為模擬環境 simulation=True）")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="演練：用正式環境登入（讀真實行情、庫存），但所有委託只在本機模擬成交，不送到凱基")
     ap.add_argument("--port", type=int, default=PORT)
     a = ap.parse_args(argv)
+    if a.live and a.dry_run:
+        print("--live 與 --dry-run 只能擇一。")
+        return 1
 
     load_env()
     if a.live and not confirm_live():
@@ -217,7 +224,9 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_cfg()
     store = Store()
     from .kgi_gateway import BrokerError, KgiBroker
-    broker = KgiBroker(simulation=not a.live, log=store.log)
+    if a.dry_run:
+        print("演練模式：以正式環境登入，只讀取行情、庫存與商品資料；委託一律在本機模擬成交，不會送到凱基。")
+    broker = KgiBroker(simulation=not (a.live or a.dry_run), log=store.log, dry_run=a.dry_run)
     try:
         broker.login(os.environ.get("KGI_PERSON_ID", ""), os.environ.get("KGI_PERSON_PWD", ""),
                      os.environ.get("KGI_TW_ACCOUNT") or None, os.environ.get("KGI_US_ACCOUNT") or None)
@@ -225,7 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[錯誤] {e}")
         return 2
     engine = eng.Engine(broker, store, cfg, live=a.live)
-    store.log("start", f"下單程式啟動（{'正式' if a.live else '模擬'}環境）")
+    label = "正式環境（真實下單）" if a.live else ("演練（正式登入，本機模擬成交，不送單）" if a.dry_run else "模擬環境")
+    store.log("start", f"下單程式啟動：{label}")
     for n in engine.resume_after_restart():
         print("[接續]", n)
 
@@ -234,9 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     stop = threading.Event()
     threading.Thread(target=eng.run_timer, args=(engine, stop), daemon=True).start()
     print("=" * 60)
-    print(f"  模式：{'正式環境（真實下單）' if a.live else '模擬環境'}")
+    print(f"  模式：{label}")
     print(f"  台股帳號：{broker.tw_account or '未設定'}　複委託帳號：{broker.us_account or '未設定'}"
-          + ("（模擬模式下美股由本機模擬成交）" if not a.live else ""))
+          + ("（模擬模式下美股由本機模擬成交）" if not (a.live or a.dry_run) else ""))
     print(f"  狀態頁：http://{HOST}:{a.port}/")
     print(f"  配對碼：{pair}")
     print("  按 Ctrl+C 結束（狀態已存檔，下次啟動會接續監控）")

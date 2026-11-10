@@ -539,6 +539,40 @@ def test_account_must_be_explicit():
         assert "不是證券帳號" in str(e)
 
 
+def test_dry_run_logs_in_live_but_never_sends():
+    """演練模式：正式環境登入（simulation=False），台股與美股委託都只在本機成交。"""
+    kgi = FakeKgi()
+    br = KgiBroker(kgi_module=kgi, simulation=False, dry_run=True)
+    br.login("A1", "pw", "9801234", "9805678")
+    assert kgi.login_args == ("A1", False)
+    clock = Clock("2026-11-10T09:30:00")
+    e = Engine(br, Store(tempfile.mkdtemp()), {}, live=False, clock=clock)
+    assert e.mode == "dry_run"
+    api = kgi.api
+    plan(e, tw(qty=1, price=100.0, exit={"stop_loss": {"type": "pct", "value": 2}}),
+         tw(symbol="2317", price_type="MKT", price=None, tif="IOC"))
+    api.Quote.push("2330", 99.5)                      # 限價 100 成交於 99.5
+    api.Quote.push("2317", 101.0)                     # 市價單以下一筆成交
+    p = [x for x in e.d["positions"].values() if x["symbol"] == "2330"][0]
+    assert p["avg"] == 99.5 and p["shares"] == 1000
+    api.Quote.push("2330", 97.0)                      # 觸發停損，平倉單也在本機成交
+    api.Quote.push("2330", 97.0)
+    assert e.d["positions"][p["id"]]["status"] == "closed"
+    clock.set("2026-11-10T23:00:00")
+    plan(e, us(qty=2, price=200.0))
+    api.USQuote.push("AAPL", 199.0)
+    assert api.Order.calls == [] and api.SubOrder.calls == []     # 從未送到凱基
+    assert any(x["symbol"] == "AAPL" and x["status"] == "open" for x in e.d["positions"].values())
+    # 演練也依真實交易時段檢查
+    clock.set("2026-11-10T07:00:00")
+    assert not plan(e, tw())[0]["ok"]
+    # 重啟後本機模擬委託失效，不會被誤認為券商委託
+    plan(e, us(qty=1, price=100.0))
+    e2 = Engine(br, e.store, {}, live=False, clock=clock)
+    e2.resume_after_restart()
+    assert [o for o in e2.d["orders"].values()][-1]["status"] == "cancelled"
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re
