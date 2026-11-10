@@ -645,6 +645,17 @@ const PTS = ["LMT","MKT","RANGE_MKT","LIMIT_UP","LIMIT_DOWN","REFERENCE"];
 const TIFS = ["ROD","IOC","FOK"];
 const ord = {items:[], conn:null, inv:null, seq:0};
 const MODE_TXT = {live:"正式模式（真實下單）", simulation:"模擬模式", dry_run:"演練模式（不送單）"};
+/* 美股時間：網頁一律輸入台北時間，送出時換成美東時間（自動依目前夏令／冬令） */
+function usDiff(){   // 台北比美東快幾小時：夏令 12、冬令 13
+  const now = new Date(), h = tz => +new Intl.DateTimeFormat("en-US", {timeZone:tz, hour:"2-digit", hourCycle:"h23"}).format(now);
+  const m = tz => +new Intl.DateTimeFormat("en-US", {timeZone:tz, day:"2-digit"}).format(now);
+  let d = h("Asia/Taipei") - h("America/New_York"); if (m("Asia/Taipei") !== m("America/New_York")) d += 24;
+  return ((d % 24) + 24) % 24;
+}
+const shiftHM = (hm, hrs) => { if (!hm) return ""; const [h, m] = hm.split(":").map(Number); const t = ((h * 60 + m + hrs * 60) % 1440 + 1440) % 1440; return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0"); };
+const tpeToEt = hm => shiftHM(hm, -usDiff());
+const etToTpe = hm => shiftHM(hm, usDiff());
+const mkTime = (it, hm) => it.market === "US" ? tpeToEt(hm) : hm;   // 送給下單程式的市場當地時間
 const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
 const lsSet = (k, v) => { try{ localStorage.setItem(k, v); }catch(e){} };
 const ssGet = k => { try{ return sessionStorage.getItem(k); }catch(e){ return null; } };
@@ -729,7 +740,7 @@ function errsOf(it){
     }
     if ((ex.slT === "pct" && num(ex.slV) >= 100) || (ex.tpT === "pct" && num(ex.tpV) >= 100) || num(ex.tr) >= 100) e.push("% 需小於 100");
     if (!!ex.ws !== !!ex.we) e.push("進場時間窗需同時填開始與結束");
-    if (ex.ws && ex.we && ex.ws >= ex.we) e.push("進場時間窗的結束需晚於開始");
+    if (ex.ws && ex.we && mkTime(it, ex.ws) >= mkTime(it, ex.we)) e.push("進場時間窗的結束需晚於開始" + (it.market === "US" ? "（以美東時間比較）" : ""));
     const any = [ex.slV, ex.tpV, ex.tr, ex.bo, ex.ws, ex.et, ex.mh].some(v => v !== "" && v != null) || ex.pt === "daytrade";
     if (!any) e.push("出場規則至少設定一項（或取消「加掛出場規則」）");
     const sd = sideOf(it), ref = it.kind === "order" ? estPrice(it) : +it.position.avg;
@@ -757,11 +768,11 @@ function whyList(it){
   return li.length ? `<details class="why"><summary>為什麼有些選項不能選？</summary><ul>${li.join("")}</ul></details>` : "";
 }
 function exitHTML(it){
-  const ex = it.ex, sd = sideOf(it), tzName = it.market === "US" ? "美東時間" : "台北時間";
+  const ex = it.ex, sd = sideOf(it), tzName = "台北時間";
   const isPos = it.kind === "position_exit";
   const canEx = !!sd;
   const forced = it.category === "daytrade_short";
-  const dtNote = it.market === "US" ? "未填出場時間時，收盤前 15 分鐘（美東 15:45）強制平倉" : "未填出場時間時，13:20 強制平倉";
+  const dtNote = it.market === "US" ? `未填出場時間時，收盤前 15 分鐘（台北 ${etToTpe("15:45")}）強制平倉` : "未填出場時間時，13:20 強制平倉";
   const head = isPos ? `<div class="exhead">出場規則</div>` :
     `<label class="exhead"><input type="checkbox" data-f="exitOn"${it.exitOn ? " checked" : ""}${!canEx || forced ? " disabled" : ""}> 加掛出場規則${!canEx ? `<small style="color:var(--muted);font-weight:400">（平倉單不需出場規則）</small>` : forced ? `<small style="color:var(--muted);font-weight:400">（先賣後買必須當日買回，固定為當沖）</small>` : ""}</label>`;
   if (!it.exitOn) return `<div class="exbox">${head}</div>`;
@@ -781,7 +792,14 @@ function exitHTML(it){
       <label class="fld"><span>突破價進場（${sd === "long" ? "≥" : "≤"} 此價才送單）</span><input data-f="ex.bo" type="number" step="any" min="0" value="${esc(ex.bo)}"></label>`}
       <label class="fld"><span>出場時間（${tzName}）</span><input data-f="ex.et" type="time" value="${esc(ex.et)}"></label>
       <label class="fld"><span>波段最長持有天數</span><input data-f="ex.mh" type="number" step="1" min="1" value="${esc(ex.mh)}"${ex.pt === "daytrade" ? " disabled" : ""}></label>
-    </div></div>`;
+    </div>${tzHint(it)}</div>`;
+}
+function tzHint(it){
+  if (it.market !== "US") return "";
+  const ex = it.ex, d = usDiff(), parts = [];
+  if (ex.ws || ex.we) parts.push(`進場時間窗 美東 ${tpeToEt(ex.ws) || "?"}–${tpeToEt(ex.we) || "?"}`);
+  if (ex.et) parts.push(`出場時間 美東 ${tpeToEt(ex.et)}`);
+  return `<p class="sum tzh">時間請填台北時間，送出時自動換成美東時間${parts.length ? "：" + parts.join("、") : ""}。目前美國${d === 12 ? "夏令" : "冬令"}時間，美股開盤 台北 ${etToTpe("09:30")}、收盤 ${etToTpe("16:00")}。</p>`;
 }
 function cardHTML(it){
   const errs = errsOf(it);
@@ -851,6 +869,8 @@ $("orderCards").addEventListener("input", e => {
   const sum = card.querySelector(".sum"), tmp = document.createElement("div");
   tmp.innerHTML = cardHTML(it);
   if (sum) sum.innerHTML = tmp.querySelector(".sum")?.innerHTML || "";
+  const tz = card.querySelector(".tzh"), ntz = tmp.querySelector(".tzh");
+  if (tz && ntz) tz.innerHTML = ntz.innerHTML;
   const oe = card.querySelector(".errs"), ne = tmp.querySelector(".errs");
   if (oe) oe.remove();
   if (ne) card.appendChild(ne);
@@ -940,8 +960,8 @@ function exitPayload(it){
   if (!it.exitOn) return null;
   const x = it.ex, lv = (t, v) => v === "" || v == null ? null : {type:t, value:+v};
   return {position_type:x.pt, stop_loss:lv(x.slT, x.slV), take_profit:lv(x.tpT, x.tpV), trailing_pct:x.tr === "" ? null : +x.tr,
-    entry_window:x.ws && x.we ? {start:x.ws, end:x.we} : null, breakout_price:x.bo === "" ? null : +x.bo,
-    exit_time:x.et || null, max_hold_days:x.pt === "swing" && x.mh !== "" ? +x.mh : null};
+    entry_window:x.ws && x.we ? {start:mkTime(it, x.ws), end:mkTime(it, x.we)} : null, breakout_price:x.bo === "" ? null : +x.bo,
+    exit_time:x.et ? mkTime(it, x.et) : null, max_hold_days:x.pt === "swing" && x.mh !== "" ? +x.mh : null};
 }
 function planOf(items, mode){
   return {version:1, id:"plan-" + Date.now().toString(36), created_at:new Date().toISOString(), source:"stage-scan",
@@ -958,8 +978,9 @@ function describe(it){
   const lvs = v => v ? (v.type === "pct" ? v.value + "%" : v.value) : null;
   const ex = x ? [x.position_type === "daytrade" ? "當沖" : "波段", lvs(x.stop_loss) && "停損 " + lvs(x.stop_loss),
     lvs(x.take_profit) && "停利 " + lvs(x.take_profit), x.trailing_pct && `移動停利 ${x.trailing_pct}%`,
-    x.entry_window && `進場時間窗 ${x.entry_window.start}–${x.entry_window.end}`, x.breakout_price && `突破 ${x.breakout_price} 進場`,
-    x.exit_time && `出場時間 ${x.exit_time}`, x.max_hold_days && `最長持有 ${x.max_hold_days} 天`].filter(Boolean).join("、") : "不加出場規則";
+    x.entry_window && `進場時間窗 台北 ${it.ex.ws}–${it.ex.we}` + (it.market === "US" ? `（美東 ${x.entry_window.start}–${x.entry_window.end}）` : ""),
+    x.breakout_price && `突破 ${x.breakout_price} 進場`,
+    x.exit_time && `出場時間 台北 ${it.ex.et}` + (it.market === "US" ? `（美東 ${x.exit_time}）` : ""), x.max_hold_days && `最長持有 ${x.max_hold_days} 天`].filter(Boolean).join("、") : "不加出場規則";
   if (it.kind === "position_exit")
     return `<b>${esc(it.market)} ${esc(it.symbol)} ${esc(it.name)}</b>　對庫存設定出場規則（${fmtN(it.position.shares)} 股）<br><span class="ln">出場：${esc(ex)}；平倉方式：${esc(closeTxt(it))}</span>`;
   const a = est(it);

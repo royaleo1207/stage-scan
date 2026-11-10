@@ -86,14 +86,15 @@ async function api(path, body){
 function showLogin(msg){ $("app").classList.add("hidden"); $("login").classList.remove("hidden"); $("lerr").textContent = msg || ""; }
 $("f").addEventListener("submit", e => { e.preventDefault(); code = $("code").value.trim(); try{ sessionStorage.setItem("pair", code); }catch(e){} start(); });
 
-function rules(r){
+function rules(r, market){
   if (!r) return "—";
+  const tz = market === "US" && (r.entry_window || r.exit_time) ? "（時間為美東）" : "";
   const lv = (x, u) => !x ? null : (x.type === "pct" ? `${x.value}%` : `${x.value}`);
   return [r.position_type === "daytrade" ? "當沖" : "波段",
     lv(r.stop_loss) && "停損 " + lv(r.stop_loss), lv(r.take_profit) && "停利 " + lv(r.take_profit),
     r.trailing_pct && `移動停利 ${r.trailing_pct}%`, r.entry_window && `進場 ${r.entry_window.start}–${r.entry_window.end}`,
     r.breakout_price && `突破 ${r.breakout_price}`, r.exit_time && `出場 ${r.exit_time}`, r.max_hold_days && `最長 ${r.max_hold_days} 天`
-  ].filter(Boolean).join("、");
+  ].filter(Boolean).join("、") + tz;
 }
 function render(s){
   $("mode").textContent = {live:"正式環境", simulation:"模擬環境", dry_run:"演練（不送單）"}[s.mode] || s.mode;
@@ -115,7 +116,7 @@ function render(s){
     (s.positions.length ? s.positions.map(p => `<tr><td>${esc(p.id)}</td><td>${esc(p.market)}</td><td>${esc(p.symbol)}</td>
       <td>${p.side === "long" ? "多" : "空"}</td><td>${esc(CAT[p.kind] || p.kind)}／${esc(UNIT[p.unit])}</td><td class="num">${n0(p.shares)}</td>
       <td class="num">${n2(p.avg)}</td><td class="num">${n2(p.last)}</td><td class="num ${cls(p.realized)}">${n0(p.realized)}</td>
-      <td>${esc(rules(p.rules))}${p.exit_reason ? `<br><span class="muted">${esc(p.exit_reason)}</span>` : ""}</td>
+      <td>${esc(rules(p.rules, p.market))}${p.exit_reason ? `<br><span class="muted">${esc(p.exit_reason)}</span>` : ""}</td>
       <td><span class="st ${esc(p.status)}">${esc(ST[p.status] || p.status)}</span></td>
       <td>${["open","exit_waiting","exit_failed"].includes(p.status) ? `<button data-detach="${esc(p.id)}" type="button">停止監控</button>` : ""}</td></tr>`).join("")
       : `<tr><td colspan="12" class="muted">沒有部位</td></tr>`);
