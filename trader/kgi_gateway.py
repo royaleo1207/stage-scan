@@ -42,10 +42,14 @@ def _name(x) -> str:
 
 
 def _num(v, default=0.0):
+    """數字欄位可能是字串、帶千分位逗號或空白（例如 " 1,000 "）。"""
+    if isinstance(v, str):
+        v = v.replace(",", "").strip()
     try:
-        return float(v)
+        f = float(v)
     except (TypeError, ValueError):
         return default
+    return default if f != f else f       # NaN 視為沒有值
 
 
 def _rows(df) -> list[dict]:
@@ -88,6 +92,7 @@ class KgiBroker:
         # 凱基測試說明要求模擬環境的下單間隔大於 1 秒；正式環境預設不限制
         self.min_interval = 1.1 if simulation else 0.0
         self._last_place = 0.0
+        self.raw_info: dict[str, dict] = {}     # 最近一次庫存查詢：券商回傳幾列、有哪些欄位（只供診斷）
 
     # ── 連線與帳號 ──
     def login(self, person_id: str, password: str, tw_account: str | None, us_account: str | None) -> list[dict]:
@@ -186,7 +191,9 @@ class KgiBroker:
 
     def tw_inventory(self) -> list[dict]:
         out = []
-        for r in _rows(self.api.Account.InventorySum("B")):
+        rows = _rows(self.api.Account.InventorySum("B"))
+        self.raw_info["TW"] = {"rows": len(rows), "columns": list(rows[0].keys())[:60] if rows else []}
+        for r in rows:
             sym = str(r.get("Symbol", "")).strip()
             last = _num(r.get("RLPRICE"), None)
             for kind, qcol, pcol in (("cash", "NETQTY0", "AVG_PRICE0"), ("odd", "NETQTY9", "AVG_PRICE0"),
@@ -215,7 +222,9 @@ class KgiBroker:
         if self.simulation:
             return self.sim.inventory() if self.sim else []
         out = []
-        for r in _rows(self.api.SubAccount.StockPositionReport()):
+        rows = _rows(self.api.SubAccount.StockPositionReport())
+        self.raw_info["US"] = {"rows": len(rows), "columns": list(rows[0].keys())[:60] if rows else []}
+        for r in rows:
             q = int(_num(r.get("Qty"), 0))
             if q:
                 out.append({"market": "US", "symbol": str(r.get("symbol", "")).split(".")[0],

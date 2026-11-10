@@ -150,6 +150,10 @@ def make_handler(engine: eng.Engine, pair_code: str, allowed_origins: list[str])
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if path == "/favicon.ico":           # 瀏覽器自動要圖示，不需配對碼也不寫紀錄
+                self.send_response(204)
+                self.end_headers()
+                return
             if path == "/api/ping":
                 if self._guard(need_auth=False):
                     self._json(200, {"ok": True, "app": "stage-scan-trader", "mode": engine.mode,

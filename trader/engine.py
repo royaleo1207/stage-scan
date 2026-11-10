@@ -801,7 +801,7 @@ class Engine:
                 r["monitored_by"] = next((p["id"] for p in self.d["positions"].values()
                                           if p["status"] in ("open", "exiting") and p["market"] == r["market"]
                                           and p["symbol"] == r["symbol"] and p["kind"] == kind), None)
-            return {"ok": not errs, "items": out, "errors": errs}
+            return {"ok": not errs, "items": out, "errors": errs, "raw": dict(getattr(self.broker, "raw_info", {}) or {})}
 
 
 def run_timer(engine: Engine, stop: threading.Event, every: float = 1.0) -> None:

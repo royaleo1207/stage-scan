@@ -144,7 +144,7 @@ async function loadInv(){
     $("tInv").innerHTML = `<tr><th>市場</th><th>代號</th><th>名稱</th><th>種類</th><th class="num">股數</th><th class="num">成本</th><th class="num">最新</th><th>監控</th></tr>` +
       (j.items.length ? j.items.map(r => `<tr><td>${esc(r.market)}</td><td>${esc(r.symbol)}</td><td>${esc(r.name)}</td><td>${esc({cash:"現股",odd:"零股",margin:"融資",short:"融券",lend:"借券"}[r.kind])}</td>
         <td class="num">${n0(r.shares)}</td><td class="num">${n2(r.avg)}</td><td class="num">${n2(r.last)}</td><td>${esc(r.monitored_by || "")}</td></tr>`).join("")
-        : `<tr><td colspan="8" class="muted">沒有庫存</td></tr>`) + (j.errors.length ? `<tr><td colspan="8" class="err">${esc(j.errors.join("；"))}</td></tr>` : "");
+        : `<tr><td colspan="8" class="muted">沒有庫存。${esc(Object.entries(j.raw || {}).map(([m, r]) => `${m} 券商回傳 ${r.rows} 列` + (r.rows ? `，欄位：${r.columns.join("、")}` : "")).join("；"))}</td></tr>`) + (j.errors.length ? `<tr><td colspan="8" class="err">${esc(j.errors.join("；"))}</td></tr>` : "");
   }catch(e){ $("tInv").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; }
 }
 let timer;

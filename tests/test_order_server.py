@@ -438,6 +438,14 @@ def test_inventory_attach_exit():
     assert not r[0]["ok"] and "庫存只有" in r[0]["reason"]
 
 
+def test_inventory_numbers_with_commas_and_raw_info():
+    e, api, _ = setup()
+    api.Account.rows = [{"Symbol": "2330 ", "NETQTY0": " 2,000 ", "AVG_PRICE0": "1,050.5", "RLPRICE": "1,060"}]
+    j = e.inventory()
+    assert [(r["symbol"], r["shares"], r["avg"], r["last"]) for r in j["items"]] == [("2330", 2000, 1050.5, 1060.0)]
+    assert j["raw"]["TW"]["rows"] == 1 and "NETQTY0" in j["raw"]["TW"]["columns"]
+
+
 def test_restart_resumes_monitoring():
     folder = tempfile.mkdtemp()
     e, api, _ = setup(folder=folder)
