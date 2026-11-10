@@ -169,11 +169,20 @@ class _SubAccount:
         return self.rows
 
 
+def _check_cb(func):
+    """與 kgisuperpy 2.1.2 basic_quote.__set_and_check_callback_function__ 相同的檢查。"""
+    if not callable(func) or func.__annotations__.get("return") not in (None, type(None)):
+        raise TypeError("The provided function does not match the required signature.")
+    if len(func.__annotations__) > 2:
+        raise TypeError("The provided function must only accept self and one additional parameter.")
+
+
 class _Quote:
     def __init__(self):
         self.cb, self.subs = None, []
 
     def set_cb_tick(self, cb):
+        _check_cb(cb)
         self.cb = cb
 
     def subscribe_tick(self, symbol, odd_lot=False):

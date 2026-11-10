@@ -331,7 +331,7 @@ class KgiBroker:
             self.api.USQuote.subscribe_tick(symbol)
         self._subs.add(key)
 
-    def _tw_tick(self, *args) -> None:
+    def _tw_tick(self, *args):   # 不可加型別標註：SuperPy 會檢查 __annotations__，字串 'None' 會被拒絕
         t = args[-1]
         price = _num(getattr(t, "close", None), None)
         if price:
@@ -340,7 +340,7 @@ class KgiBroker:
                 self.sim.on_tick("TW", sym, odd, price)
             self._on_tick("TW", sym, odd, price, str(getattr(t, "datetime", "")))
 
-    def _us_tick(self, *args) -> None:
+    def _us_tick(self, *args):   # 不可加型別標註：SuperPy 會檢查 __annotations__，字串 'None' 會被拒絕
         t = args[-1]
         price = _num(getattr(t, "close", None), None)
         if price:
