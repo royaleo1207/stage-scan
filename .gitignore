@@ -4,3 +4,6 @@ trader/config.yaml.bak
 trader/.env
 backtest/results/
 data/
+trader/runtime/
+trader/order_config.yaml
+.env

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下單程式狀態</title>
+<style>
+:root{--bg:#EEF1F4;--panel:#fff;--ink:#18222D;--muted:#5B6876;--line:#D3DAE2;--grid:#E3E8ED;--up:#CC2B36;--dn:#1B8655;--warn:#B87B0B;--focus:#2F6FDB;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11161C;--panel:#192029;--ink:#E4EAF0;--muted:#94A2B0;--line:#2B3540;--grid:#222B35;--up:#FF5C66;--dn:#3DC283;--warn:#E5AC3C;--focus:#79A6FF;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#11161C;--panel:#192029;--ink:#E4EAF0;--muted:#94A2B0;--line:#2B3540;--grid:#222B35;--up:#FF5C66;--dn:#3DC283;--warn:#E5AC3C;--focus:#79A6FF;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,"Microsoft JhengHei","PingFang TC",sans-serif;font-variant-numeric:tabular-nums}
+.wrap{max-width:1200px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:22px;margin:0}
+h2{font-size:15px;margin:22px 0 8px}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.mode{display:inline-block;padding:2px 10px;border-radius:4px;font-weight:700;margin-left:8px;font-size:13px}
+.mode.sim{background:rgba(27,134,85,.12);color:var(--dn)} .mode.live{background:var(--up);color:#fff}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.card b{display:block;font-size:18px} .card span{color:var(--muted);font-size:12px}
+.halt{margin-top:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--up);color:var(--up);font-weight:600}
+button{font:inherit;color:inherit;border:1px solid var(--line);background:var(--panel);padding:6px 12px;border-radius:6px;cursor:pointer}
+button:hover{border-color:var(--muted)} button.danger{border-color:var(--up);color:var(--up);font-weight:700}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.tbl{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:640px}
+th,td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;font-size:13px}
+th{color:var(--muted);font-weight:500;font-size:12px} tr:last-child td{border-bottom:0}
+td.num{text-align:right} .pos{color:var(--up)} .neg{color:var(--dn)} .muted{color:var(--muted)}
+.st{font-size:12px;padding:1px 6px;border-radius:3px;background:var(--grid)}
+.st.rejected,.st.exit_failed,.st.unknown{background:var(--up);color:#fff}
+.log td{white-space:normal}
+.login{max-width:420px;margin:60px auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px}
+input{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 10px;width:100%}
+.err{color:var(--up);margin-top:8px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="login hidden" id="login">
+  <h1>下單程式狀態頁</h1>
+  <p class="muted">請輸入下單程式終端機顯示的 6 位數配對碼。</p>
+  <form id="f"><input id="code" inputmode="numeric" autocomplete="off" aria-label="配對碼" placeholder="配對碼"><p><button type="submit">進入</button></p></form>
+  <div class="err" id="lerr" role="alert"></div>
+</div>
+<div class="wrap hidden" id="app">
+  <div class="bar">
+    <h1>下單程式狀態<span class="mode" id="mode"></span></h1>
+    <div>
+      <button class="danger" id="bCancel" type="button">全部取消</button>
+      <button class="danger" id="bFlat" type="button">全部平倉</button>
+      <button id="bResume" type="button">恢復今日新委託</button>
+    </div>
+  </div>
+  <p class="muted" style="margin:6px 0 0">「全部取消」刪除本程式送出的所有未成交委託與等待中的進場單；「全部平倉」另外把本程式監控中的部位全部平倉，並停止今日新委託。都不會動到你在其他軟體下的單。</p>
+  <div class="halt hidden" id="halt"></div>
+  <div class="cards" id="cards"></div>
+  <h2>部位與出場規則</h2><div class="tbl"><table id="tPos"></table></div>
+  <h2>委託</h2><div class="tbl"><table id="tOrd"></table></div>
+  <h2>成交</h2><div class="tbl"><table id="tFill"></table></div>
+  <h2>券商庫存 <button id="bInv" type="button">重新查詢</button></h2><div class="tbl"><table id="tInv"></table></div>
+  <h2>紀錄</h2><div class="tbl log"><table id="tLog"></table></div>
+</div>
+<script>
+(function(){
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const n0 = v => v == null ? "—" : Number(v).toLocaleString("zh-TW", {maximumFractionDigits:0});
+const n2 = v => v == null ? "—" : Number(v).toLocaleString("zh-TW", {maximumFractionDigits:4});
+const cls = v => v > 0 ? "pos" : v < 0 ? "neg" : "";
+const ST = {armed:"等待條件",sending:"送出中",submitted:"已委託",partial:"部分成交",filled:"全部成交",cancelled:"已取消",partial_cancelled:"部分成交後取消",rejected:"失敗",expired:"已過期",unknown:"需對帳",open:"監控中",exiting:"平倉中",exit_waiting:"等開盤平倉",exit_failed:"平倉失敗",closed:"已平倉",detached:"已停止監控"};
+const CAT = {cash:"現股",margin:"融資",short:"融券",lend_sell:"借券賣出",daytrade_short:"現股當沖先賣",collateral_sell:"賣出擔保品"};
+const UNIT = {common:"整股",odd:"盤中零股",odd_after:"盤後零股",fixing:"定盤",shares:"股"};
+let code = "";
+try{ code = sessionStorage.getItem("pair") || ""; }catch(e){}
+
+async function api(path, body){
+  const r = await fetch(path, body === undefined ? {headers:{"X-Pair-Code":code}} :
+    {method:"POST", headers:{"X-Pair-Code":code, "Content-Type":"application/json"}, body:JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401){ showLogin(j.error); throw new Error(j.error); }
+  return j;
+}
+function showLogin(msg){ $("app").classList.add("hidden"); $("login").classList.remove("hidden"); $("lerr").textContent = msg || ""; }
+$("f").addEventListener("submit", e => { e.preventDefault(); code = $("code").value.trim(); try{ sessionStorage.setItem("pair", code); }catch(e){} start(); });
+
+function rules(r){
+  if (!r) return "—";
+  const lv = (x, u) => !x ? null : (x.type === "pct" ? `${x.value}%` : `${x.value}`);
+  return [r.position_type === "daytrade" ? "當沖" : "波段",
+    lv(r.stop_loss) && "停損 " + lv(r.stop_loss), lv(r.take_profit) && "停利 " + lv(r.take_profit),
+    r.trailing_pct && `移動停利 ${r.trailing_pct}%`, r.entry_window && `進場 ${r.entry_window.start}–${r.entry_window.end}`,
+    r.breakout_price && `突破 ${r.breakout_price}`, r.exit_time && `出場 ${r.exit_time}`, r.max_hold_days && `最長 ${r.max_hold_days} 天`
+  ].filter(Boolean).join("、");
+}
+function render(s){
+  $("mode").textContent = s.mode === "live" ? "正式環境" : "模擬環境";
+  $("mode").className = "mode " + (s.mode === "live" ? "live" : "sim");
+  const d = s.day, L = s.limits;
+  $("halt").classList.toggle("hidden", !d.halted);
+  $("halt").textContent = d.halted ? "今日已停止新委託：" + d.halt_reason : "";
+  $("cards").innerHTML = [
+    ["今日損益（估）", `<b class="${cls(s.pnl_today)}">${n0(s.pnl_today)}</b>`, `虧損上限 ${n0(L.max_daily_loss)}`],
+    ["今日已實現", `<b class="${cls(d.realized)}">${n0(d.realized)}</b>`, "含手續費與交易稅估算"],
+    ["今日新委託金額", `<b>${n0(d.amount)}</b>`, `上限 ${n0(L.max_daily_amount)}，單筆 ${n0(L.max_order_amount)}`],
+    ["空方部位", `<b>${n0(s.short_exposure)}</b>`, `上限 ${n0(L.max_short_amount)}`],
+    ["今日委託筆數", `<b>${d.orders}</b>`, `上限 ${L.max_orders_per_day}`],
+    ["帳號", `<b style="font-size:14px">台股 ${s.accounts.tw ? "✓" : "✕"}　美股 ${s.accounts.us ? (s.accounts.us_local_sim ? "本機模擬" : "✓") : "✕"}</b>`,
+      `美股${s.us_dst ? "夏令" : "冬令"}時間，當沖平倉 ${s.us_flatten_tpe}（台北）`]
+  ].map(([a,b,c]) => `<div class="card"><span>${a}</span>${b}<span>${esc(c)}</span></div>`).join("");
+
+  $("tPos").innerHTML = `<tr><th>編號</th><th>市場</th><th>代號</th><th>方向</th><th>種類</th><th class="num">股數</th><th class="num">成本</th><th class="num">最新</th><th class="num">已實現</th><th>出場規則</th><th>狀態</th><th></th></tr>` +
+    (s.positions.length ? s.positions.map(p => `<tr><td>${esc(p.id)}</td><td>${esc(p.market)}</td><td>${esc(p.symbol)}</td>
+      <td>${p.side === "long" ? "多" : "空"}</td><td>${esc(CAT[p.kind] || p.kind)}／${esc(UNIT[p.unit])}</td><td class="num">${n0(p.shares)}</td>
+      <td class="num">${n2(p.avg)}</td><td class="num">${n2(p.last)}</td><td class="num ${cls(p.realized)}">${n0(p.realized)}</td>
+      <td>${esc(rules(p.rules))}${p.exit_reason ? `<br><span class="muted">${esc(p.exit_reason)}</span>` : ""}</td>
+      <td><span class="st ${esc(p.status)}">${esc(ST[p.status] || p.status)}</span></td>
+      <td>${["open","exit_waiting","exit_failed"].includes(p.status) ? `<button data-detach="${esc(p.id)}" type="button">停止監控</button>` : ""}</td></tr>`).join("")
+      : `<tr><td colspan="12" class="muted">沒有部位</td></tr>`);
+
+  $("tOrd").innerHTML = `<tr><th>編號</th><th>時間</th><th>用途</th><th>市場</th><th>代號</th><th>買賣</th><th>類別</th><th>單位</th><th>價格</th><th>條件</th><th class="num">數量</th><th class="num">成交</th><th>狀態</th><th>訊息</th><th></th></tr>` +
+    (s.orders.length ? s.orders.map(o => { const p = o.spec; return `<tr><td>${esc(o.id)}</td><td>${esc((o.created||"").slice(5,19).replace("T"," "))}</td>
+      <td>${{entry:"進場",exit:"出場",close:"平倉"}[o.role]}</td><td>${esc(o.market)}</td><td>${esc(p.symbol)}</td><td>${p.action === "Buy" ? "買進" : "賣出"}</td>
+      <td>${esc(CAT[p.category])}</td><td>${esc(UNIT[p.unit])}</td><td>${p.price_type === "LMT" ? n2(p.price) : esc({MKT:"市價",LIMIT_UP:"漲停",LIMIT_DOWN:"跌停",REFERENCE:"平盤"}[p.price_type])}</td>
+      <td>${esc(p.tif)}</td><td class="num">${n0(p.qty)}</td><td class="num">${n0(o.filled)}${o.avg ? " @ " + n2(o.avg) : ""}</td>
+      <td><span class="st ${esc(o.status)}">${esc(ST[o.status] || o.status)}</span></td><td style="white-space:normal;min-width:180px">${esc(o.msg)}</td>
+      <td>${["armed","submitted","partial"].includes(o.status) ? `<button data-cancel="${esc(o.id)}" type="button">取消</button>` : ""}</td></tr>`; }).join("")
+      : `<tr><td colspan="15" class="muted">沒有委託</td></tr>`);
+
+  $("tFill").innerHTML = `<tr><th>時間</th><th>委託</th><th>市場</th><th>代號</th><th>買賣</th><th>類別</th><th class="num">數量</th><th class="num">股數</th><th class="num">價格</th></tr>` +
+    (s.fills.length ? s.fills.map(f => `<tr><td>${esc(f.ts.slice(5,19).replace("T"," "))}</td><td>${esc(f.order)}</td><td>${esc(f.market)}</td><td>${esc(f.symbol)}</td>
+      <td>${f.action === "Buy" ? "買進" : "賣出"}</td><td>${esc(CAT[f.category])}</td><td class="num">${n0(f.qty)}</td><td class="num">${n0(f.shares)}</td><td class="num">${n2(f.price)}</td></tr>`).join("")
+      : `<tr><td colspan="9" class="muted">沒有成交</td></tr>`);
+
+  $("tLog").innerHTML = `<tr><th>時間</th><th>類型</th><th>內容</th></tr>` +
+    s.log.map(l => `<tr><td style="white-space:nowrap">${esc(l.ts.slice(5).replace("T"," "))}</td><td>${esc(l.kind)}</td><td>${esc(l.msg)}</td></tr>`).join("");
+}
+async function loadInv(){
+  $("tInv").innerHTML = `<tr><td class="muted">查詢中…</td></tr>`;
+  try{
+    const j = await api("/api/inventory");
+    $("tInv").innerHTML = `<tr><th>市場</th><th>代號</th><th>名稱</th><th>種類</th><th class="num">股數</th><th class="num">成本</th><th class="num">最新</th><th>監控</th></tr>` +
+      (j.items.length ? j.items.map(r => `<tr><td>${esc(r.market)}</td><td>${esc(r.symbol)}</td><td>${esc(r.name)}</td><td>${esc({cash:"現股",odd:"零股",margin:"融資",short:"融券",lend:"借券"}[r.kind])}</td>
+        <td class="num">${n0(r.shares)}</td><td class="num">${n2(r.avg)}</td><td class="num">${n2(r.last)}</td><td>${esc(r.monitored_by || "")}</td></tr>`).join("")
+        : `<tr><td colspan="8" class="muted">沒有庫存</td></tr>`) + (j.errors.length ? `<tr><td colspan="8" class="err">${esc(j.errors.join("；"))}</td></tr>` : "");
+  }catch(e){ $("tInv").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; }
+}
+let timer;
+async function tick(){ try{ render(await api("/api/state")); }catch(e){ if (!$("login").classList.contains("hidden")) clearInterval(timer); } }
+async function start(){
+  try{ render(await api("/api/state")); }catch(e){ return; }
+  $("login").classList.add("hidden"); $("app").classList.remove("hidden");
+  clearInterval(timer); timer = setInterval(tick, 2000); loadInv();
+}
+async function act(path, ask, body){
+  if (ask && !confirm(ask)) return;
+  const j = await api(path, body || {});
+  if (j.ok === false) alert(j.error || (j.failed || []).join("\n") || "失敗");
+  tick();
+}
+$("bCancel").addEventListener("click", () => act("/api/cancel_all", "確定刪除本程式所有未成交委託與等待中的進場單？"));
+$("bFlat").addEventListener("click", () => act("/api/flatten_all", "確定把本程式監控中的部位全部平倉，並停止今日新委託？"));
+$("bResume").addEventListener("click", () => act("/api/resume", "確定恢復今日新委託？"));
+$("bInv").addEventListener("click", loadInv);
+document.addEventListener("click", e => {
+  const c = e.target.closest("[data-cancel]"); if (c) act("/api/cancel", `取消委託 ${c.dataset.cancel}？`, {id:c.dataset.cancel});
+  const d = e.target.closest("[data-detach]"); if (d) act("/api/detach", `停止監控 ${d.dataset.detach}？（不會賣出，只是不再自動出場）`, {id:d.dataset.detach});
+});
+if (code) start(); else showLogin();
+})();
+</script>
+</body>
+</html>

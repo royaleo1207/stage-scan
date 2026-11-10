@@ -1,0 +1,34 @@
+# 本機下單程式（python -m trader.order_server）的預設值。請勿直接修改這個檔案。
+# 要調整時，建立 trader/order_config.yaml（不會提交），只寫要改的項目，例如：
+#   risk:
+#     max_order_amount: 200000
+
+risk:
+  max_order_amount: 300000      # 單筆金額上限（台幣；美股以 usd_twd 換算）
+  max_daily_amount: 2000000     # 單日新委託總金額上限（台幣）
+  max_daily_loss: 30000         # 單日最大虧損（台幣，已實現＋未實現）；觸發後停止新單並平掉當沖部位
+  max_short_amount: 500000      # 空方部位（融券、借券賣出、現股當沖先賣）總金額上限（台幣）
+  max_orders_per_day: 50        # 單日新委託筆數上限
+  usd_twd: 32.0                 # 美元兌台幣匯率（只用於風控換算）
+
+exits:
+  tw_common_price: limit_updown # 台股整股出場：limit_updown（跌停賣出／漲停買回，ROD）或 market（市價 IOC）
+  tw_odd_slip_ticks: 5          # 台股零股出場：最新價往不利方向 N 檔的限價（零股只能限價）
+  us_slip_pct: 0.5              # 美股出場：最新價往不利方向 X% 的限價（複委託只能限價）
+  retry_sec: 20                 # 出場限價單幾秒沒成交就刪單，以更不利的價格重掛
+  max_retries: 5                # 出場重送次數上限，超過會在狀態頁標示「平倉失敗，請手動處理」
+
+enforce_hours_in_simulation: false   # 模擬環境是否也檢查交易時段（凱基模擬環境營業日 08:30～隔日 05:00 可下單）
+
+costs:                          # 損益估算用（台股）
+  fee_rate: 0.001425
+  fee_discount: 1.0
+  min_fee: 20
+  tax_rate: 0.003
+  tax_day_trade: 0.0015
+  slippage_ticks: 1
+
+# 允許呼叫下單程式的網頁來源（127.0.0.1、localhost 一律允許）。
+# 用 file:// 直接開 index.html 時來源是 "null"，需要的話自行加入 "null"。
+allowed_origins:
+  - https://royaleo1207.github.io
