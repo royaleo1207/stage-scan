@@ -46,6 +46,7 @@ h1{font:900 clamp(28px,4.4vw,44px)/1.1 var(--serif);margin:0;letter-spacing:.02e
 .btn{border:1px solid var(--line);background:var(--panel);padding:7px 14px;border-radius:6px;cursor:pointer}
 .btn:hover{border-color:var(--muted)}
 .btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
 .demo-flag{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:4px;background:var(--s3t);color:var(--s3);font-size:13px;font-weight:500}
 
 /* 階段循環圖 */
@@ -1020,6 +1021,8 @@ $("btnReview").addEventListener("click", async () => {
   $("dlgAck").checked = false;
   $("dlgAckText").textContent = live ? "我了解這是正式下單，會用真實資金" : "我已確認以上內容";
   $("dlgSend").disabled = !ord.conn;
+  $("dlgSend").classList.remove("hidden");
+  $("dlgCancel").textContent = "返回修改";
   $("dlgAckWrap").classList.toggle("hidden", !ord.conn);
   $("dlg").showModal();
 });
@@ -1034,8 +1037,11 @@ $("dlgSend").addEventListener("click", async () => {
     const ok = ord.items.filter(i => byId[i.id]?.ok);
     ord.items.forEach(i => { if (byId[i.id]) i.result = {ok:byId[i.id].ok, reason:byId[i.id].reason}; });
     $("dlgBody").innerHTML = `<p>已送出：接受 <b>${ok.length}</b> 筆、拒絕 <b>${r.results.length - ok.length}</b> 筆。接受的委託已從清單移除，可到 <a href="${TRADER}/" target="_blank" rel="noopener">本機狀態頁</a> 查看。</p>
-      <ol>${r.results.map(x => `<li>${esc(x.symbol)}：${x.ok ? "接受" : "<b>拒絕</b>"}　${esc(x.reason || "")}</li>`).join("")}</ol>`;
+      <ol>${r.results.map(x => `<li>${esc(x.symbol)}：${x.ok ? "接受" : "<b>拒絕</b>"}　${esc(x.reason || "")}</li>`).join("")}</ol>
+      ${r.results.some(x => x.ok && /等待進場條件/.test(x.reason || "")) ? `<p class="sum">「等待進場條件」：委託先在下單程式裡等候，進入你設的進場時間窗（且價格突破突破價）時才會送出；時間窗結束仍未觸發會自動過期。美股要台北 ${etToTpe("09:30")} 開盤後才有報價。</p>` : ""}`;
     $("dlgAckWrap").classList.add("hidden");
+    $("dlgSend").classList.add("hidden");
+    $("dlgCancel").textContent = "關閉";
     ord.items = ord.items.filter(i => !byId[i.id]?.ok); save(); renderOrders(); syncChecks();
   }catch(e){
     $("dlgBody").insertAdjacentHTML("afterbegin", `<p class="errs">送出失敗：${esc(e.message)}</p>`);
