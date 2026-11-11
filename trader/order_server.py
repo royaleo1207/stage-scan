@@ -36,6 +36,8 @@ HERE = Path(__file__).resolve().parent
 CFG_DEFAULTS = HERE / "order_defaults.yaml"
 CFG_USER = HERE / "order_config.yaml"
 STATUS_PAGE = HERE / "status_page.html"
+APP_PAGE = HERE.parent / "index.html"          # 與 GitHub Pages 同一份網頁；由本機提供時自動帶入權杖
+TOKEN_META = '<meta name="trader-token" content="">'
 MAX_BODY = 512 * 1024
 
 
@@ -77,6 +79,8 @@ def validate_cfg(cfg: dict) -> None:
         errs.append("exits.tw_common_price 只能是 limit_updown 或 market")
     if not isinstance(cfg.get("enforce_hours_in_simulation"), bool):
         errs.append("enforce_hours_in_simulation 只能是 true 或 false")
+    if not (isinstance(cfg.get("scan_url"), str) and cfg["scan_url"].startswith("https://")):
+        errs.append("scan_url 需為 https:// 開頭的網址")
     if not isinstance(cfg.get("allowed_origins"), list):
         errs.append("allowed_origins 需為清單")
     if errs:
@@ -121,7 +125,16 @@ def origin_allowed(origin: str | None, allowed: list[str]) -> bool:
     return False
 
 
-def make_handler(engine: eng.Engine, pair_code: str, allowed_origins: list[str]):
+def app_page(pair_code: str) -> bytes:
+    """本機提供的完整畫面：把權杖寫進網頁，使用者不用輸入配對碼。
+    其他網站讀不到這個回應（沒有 CORS 標頭，且禁止被嵌入 iframe）。"""
+    html = APP_PAGE.read_text(encoding="utf-8")
+    if TOKEN_META not in html:
+        raise RuntimeError("index.html 缺少 trader-token 標籤")
+    return html.replace(TOKEN_META, f'<meta name="trader-token" content="{pair_code}">', 1).encode("utf-8")
+
+
+def make_handler(engine: eng.Engine, pair_code: str, allowed_origins: list[str], scan=None):
     class H(BaseHTTPRequestHandler):
         server_version = "stage-scan-trader/1.0"
 
@@ -193,7 +206,33 @@ def make_handler(engine: eng.Engine, pair_code: str, allowed_origins: list[str])
 
         def do_GET(self):
             path = urlparse(self.path).path
-            if path in ("/", "/index.html"):
+            if path in ("/", "/index.html", "/app"):
+                if not self._host_ok():
+                    return self._json(403, {"ok": False})
+                body = app_page(pair_code)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if path == "/stage_scan.json":          # 選股資料是公開資料，不需權杖
+                if not self._host_ok():
+                    return self._json(403, {"ok": False})
+                data = scan.read_bytes() if scan else None
+                if data is None:
+                    return self._json(404, {"ok": False, "error": "尚未下載到選股資料"})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if path == "/status":
                 if not self._host_ok():
                     return self._json(403, {"ok": False})
                 body = STATUS_PAGE.read_bytes()
@@ -228,6 +267,8 @@ def make_handler(engine: eng.Engine, pair_code: str, allowed_origins: list[str])
                 return self._json(200, engine.snapshot())
             if path == "/api/inventory":
                 return self._json(200, engine.inventory())
+            if path == "/api/scan_info":
+                return self._json(200, scan.info() if scan else {"available": False})
             self._json(404, {"ok": False, "error": "沒有這個路徑"})
 
         def do_POST(self):
@@ -244,6 +285,11 @@ def make_handler(engine: eng.Engine, pair_code: str, allowed_origins: list[str])
                 return self._json(200, engine.cancel_all())
             if path == "/api/flatten_all":
                 return self._json(200, engine.flatten_all())
+            if path == "/api/scan_refresh":
+                if not scan:
+                    return self._json(200, {"ok": False, "error": "未啟用選股資料下載"})
+                changed = scan.refresh()
+                return self._json(200, {"ok": True, "changed": changed, **scan.info()})
             if path == "/api/resume":
                 return self._json(200, engine.resume())
             if path == "/api/cancel":
@@ -272,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="演練：用正式環境登入（讀真實行情、庫存），但所有委託只在本機模擬成交，不送到凱基")
     ap.add_argument("--port", type=int, default=PORT)
+    ap.add_argument("--no-browser", action="store_true", help="啟動後不要自動開啟畫面")
     a = ap.parse_args(argv)
     if a.live and a.dry_run:
         print("--live 與 --dry-run 只能擇一。")
@@ -304,17 +351,24 @@ def main(argv: list[str] | None = None) -> int:
         print("[接續]", n)
 
     pair = os.environ.get("PAIR_CODE") or f"{secrets.randbelow(10**6):06d}"
-    srv = ThreadingHTTPServer((HOST, a.port), make_handler(engine, pair, cfg.get("allowed_origins", [])))
+    from .scan_feed import ScanFeed
+    scan = ScanFeed(store.folder, url=cfg["scan_url"], log=store.log)
+    srv = ThreadingHTTPServer((HOST, a.port), make_handler(engine, pair, cfg.get("allowed_origins", []), scan))
     stop = threading.Event()
     threading.Thread(target=eng.run_timer, args=(engine, stop), daemon=True).start()
+    threading.Thread(target=scan.run, args=(stop,), daemon=True).start()
     print("=" * 60)
     print(f"  模式：{label}")
     print(f"  台股帳號：{broker.tw_account or '未設定'}　複委託帳號：{broker.us_account or '未設定'}"
           + ("（模擬模式下美股由本機模擬成交）" if not (a.live or a.dry_run) else ""))
-    print(f"  狀態頁：http://{HOST}:{a.port}/")
-    print(f"  配對碼：{pair}")
+    print(f"  主畫面（選股、下單、庫存、委託、成交）：http://{HOST}:{a.port}/")
+    print(f"  舊版狀態頁：http://{HOST}:{a.port}/status")
+    print(f"  配對碼：{pair}（只有從 GitHub 網頁連線時需要；主畫面會自動帶入）")
     print("  按 Ctrl+C 結束（狀態已存檔，下次啟動會接續監控）")
     print("=" * 60)
+    if not a.no_browser:
+        import webbrowser
+        threading.Timer(1.0, lambda: webbrowser.open(f"http://{HOST}:{a.port}/")).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

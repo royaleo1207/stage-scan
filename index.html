@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="trader-token" content="">
 <title>階段掃描｜超級績效四階段</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -240,6 +241,20 @@ dialog::backdrop{background:rgba(10,15,20,.5)}
   .orderbar{flex-direction:column;align-items:stretch;text-align:center}
   .rw.hd{display:none}
 }
+/* 委託成交 */
+.tbtns{display:inline-flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.btn.danger{border-color:var(--s2);color:var(--s2);font-weight:700}
+.tbanner{margin:0 0 12px;padding:10px 14px;border-radius:8px;border:1px solid var(--s2);color:var(--s2);font-weight:500;background:var(--panel)}
+.tcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:6px}
+.tcard{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tcard span{display:block;color:var(--muted);font-size:12px}
+.tcard b{display:block;font-size:18px;font-weight:700}
+h3.sec{font:600 15px/1.4 var(--serif);margin:18px 0 8px}
+.st{font-size:12px;padding:1px 6px;border-radius:3px;background:var(--grid)}
+.st.rejected,.st.exit_failed,.st.unknown{background:var(--s2);color:#fff}
+.invt td.wrap{white-space:normal;min-width:180px}
+.newscan{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:0 0 14px;padding:10px 14px;border-radius:8px;background:var(--s2t);color:var(--ink)}
+.newscan .btn{padding:4px 12px}
 </style>
 </head>
 <body>
@@ -273,10 +288,12 @@ dialog::backdrop{background:rgba(10,15,20,.5)}
   </section>
 
   <main id="app" class="hidden">
+    <div class="newscan hidden" id="newScan" role="status"></div>
     <nav class="tabs" role="tablist" aria-label="功能">
       <button type="button" role="tab" id="tabScan" aria-controls="paneScan" aria-selected="true">掃描結果</button>
       <button type="button" role="tab" id="tabOrder" aria-controls="paneOrder" aria-selected="false">下單面板<span class="badge" id="ordBadge"></span></button>
       <button type="button" role="tab" id="tabInv" aria-controls="paneInv" aria-selected="false">我的庫存</button>
+      <button type="button" role="tab" id="tabTrade" aria-controls="paneTrade" aria-selected="false">委託成交</button>
     </nav>
     <div id="paneScan" role="tabpanel" aria-labelledby="tabScan">
     <section class="cycle" aria-label="各階段檔數">
@@ -336,7 +353,7 @@ dialog::backdrop{background:rgba(10,15,20,.5)}
     <section id="paneOrder" role="tabpanel" aria-labelledby="tabOrder" class="hidden">
       <div class="conn" id="connBox">
         <span><i class="dot" id="connDot"></i><b>本機下單程式</b>　<span class="modetag off" id="connMode">未連線</span></span>
-        <label>配對碼 <input id="pairCode" inputmode="numeric" autocomplete="off" maxlength="12" aria-label="配對碼"></label>
+        <label id="pairWrap">配對碼 <input id="pairCode" inputmode="numeric" autocomplete="off" maxlength="12" aria-label="配對碼"></label>
         <button class="btn" type="button" id="btnConn">連線</button>
         <span class="msg" id="connMsg">在 Windows 執行 <code>python -m trader.order_server</code>（或 <code>--dry-run</code> 演練、<code>--live</code> 正式），把終端機顯示的配對碼填進來。未連線時仍可編輯與匯出計畫 JSON。</span>
       </div>
@@ -356,6 +373,26 @@ dialog::backdrop{background:rgba(10,15,20,.5)}
         <span class="msg" id="invMsg"></span>
       </div>
       <div class="invt" id="invTable"><div class="empty-o">請先在「下單面板」連線本機下單程式。</div></div>
+    </section>
+
+    <section id="paneTrade" role="tabpanel" aria-labelledby="tabTrade" class="hidden">
+      <div class="conn">
+        <span class="modetag off" id="tMode">未連線</span>
+        <span class="tbtns">
+          <button class="btn danger" type="button" id="tCancelAll">全部取消</button>
+          <button class="btn danger" type="button" id="tFlatAll">全部平倉</button>
+          <button class="btn" type="button" id="tResume">恢復今日新委託</button>
+        </span>
+        <span class="msg">「全部取消」刪除本程式送出的所有未成交委託與等待中的進場單；「全部平倉」另外把本程式監控中的部位全部平倉，並停止今日新委託。都不會動到你在其他軟體下的單。</span>
+      </div>
+      <div class="tbanner hidden" id="tHalt" role="alert"></div>
+      <div class="tbanner hidden" id="tDisc" role="alert">券商連線中斷，正在自動重新登入；重連前不送新委託，觸發的出場會在重連後立即送出。</div>
+      <div class="tcards" id="tCards"></div>
+      <h3 class="sec">部位與出場規則</h3><div class="invt" id="tPos"></div>
+      <h3 class="sec">委託</h3><div class="invt" id="tOrd"></div>
+      <h3 class="sec">成交</h3><div class="invt" id="tFill"></div>
+      <h3 class="sec">每日統計</h3><div class="invt" id="tDay"></div>
+      <details class="why" style="margin-top:14px"><summary>操作紀錄</summary><div class="invt" id="tLog" style="margin-top:8px"></div></details>
     </section>
 
     <dialog id="dlg" aria-labelledby="dlgTitle">
@@ -633,7 +670,10 @@ const drop = $("drop");
 document.addEventListener("drop", e => { const f = e.dataTransfer?.files?.[0]; if (f) readFile(f); });
 
 /* ══════════════ 下單面板 ══════════════ */
-const TRADER = "http://127.0.0.1:8765";
+// 由本機下單程式提供這個網頁時，下單程式會把權杖寫進 trader-token，不用手動輸入配對碼
+const APP_TOKEN = document.querySelector('meta[name="trader-token"]')?.content || "";
+const APP = !!APP_TOKEN;
+const TRADER = APP ? location.origin : "http://127.0.0.1:8765";
 const CAPS0 = JSON.parse(document.getElementById("caps").textContent);
 let CAPS = CAPS0;
 const LBL = CAPS0.labels;
@@ -905,15 +945,17 @@ $("list").addEventListener("change", e => {
 
 /* 分頁 */
 function showTab(name){
-  for (const [t, p] of [["tabScan","paneScan"],["tabOrder","paneOrder"],["tabInv","paneInv"]]){
+  for (const [t, p] of [["tabScan","paneScan"],["tabOrder","paneOrder"],["tabInv","paneInv"],["tabTrade","paneTrade"]]){
     const on = p === name; $(t).setAttribute("aria-selected", String(on)); $(p).classList.toggle("hidden", !on);
   }
   if (name === "paneOrder") renderOrders();
   if (name === "paneInv" && ord.conn) loadInv();
+  watchTrade(name === "paneTrade");
 }
 $("tabScan").addEventListener("click", () => showTab("paneScan"));
 $("tabOrder").addEventListener("click", () => showTab("paneOrder"));
 $("tabInv").addEventListener("click", () => showTab("paneInv"));
+$("tabTrade").addEventListener("click", () => showTab("paneTrade"));
 $("btnGoOrder").addEventListener("click", () => { showTab("paneOrder"); window.scrollTo({top:0}); });
 document.querySelector(".tabs").addEventListener("keydown", e => {
   const tabs = [...document.querySelectorAll(".tabs [role=tab]")], i = tabs.indexOf(document.activeElement);
@@ -922,7 +964,7 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
 });
 
 /* 連線本機下單程式 */
-$("pairCode").value = ssGet("pair") || "";
+$("pairCode").value = APP ? APP_TOKEN : (ssGet("pair") || "");
 async function tfetch(path, body){
   const code = $("pairCode").value.trim();
   const opt = body === undefined ? {headers:{"X-Pair-Code":code}} :
@@ -940,7 +982,7 @@ function setConn(c, msg){
   $("connMsg").textContent = msg;
 }
 async function connect(){
-  ssSet("pair", $("pairCode").value.trim());
+  if (!APP) ssSet("pair", $("pairCode").value.trim());
   $("connMsg").textContent = "連線中…";
   try{
     const ping = await (await fetch(TRADER + "/api/ping")).json();
@@ -950,7 +992,7 @@ async function connect(){
     setConn(ping, `已連線。${ping.mode === "dry_run" ? "演練模式：以正式帳號讀取真實行情與庫存，委託只在本機模擬成交，不會送到凱基。" : ""}台股帳號：${a.tw ? "已設定" : "未設定"}；美股：${a.us ? (a.us_local_sim ? "本機模擬（凱基無複委託模擬環境）" : "複委託已設定") : "未設定（無法下美股）"}。單筆上限 ${fmtN(ping.limits.max_order_amount)} 元。`);
     renderOrders();
   }catch(e){
-    setConn(null, e.message === "Failed to fetch" ? "連不到 http://127.0.0.1:8765。請確認下單程式已啟動；Safari 不允許網頁連本機，請改用 Chrome 或 Edge。" : "連線失敗：" + e.message);
+    setConn(null, APP ? "下單程式沒有回應，請關閉後重新開啟程式。（" + e.message + "）" : e.message === "Failed to fetch" ? "連不到 http://127.0.0.1:8765。請確認下單程式已啟動；Safari 不允許網頁連本機，請改用 Chrome 或 Edge。" : "連線失敗：" + e.message);
   }
 }
 $("btnConn").addEventListener("click", connect);
@@ -1036,7 +1078,7 @@ $("dlgSend").addEventListener("click", async () => {
     const byId = Object.fromEntries(r.results.map(x => [x.id, x]));
     const ok = ord.items.filter(i => byId[i.id]?.ok);
     ord.items.forEach(i => { if (byId[i.id]) i.result = {ok:byId[i.id].ok, reason:byId[i.id].reason}; });
-    $("dlgBody").innerHTML = `<p>已送出：接受 <b>${ok.length}</b> 筆、拒絕 <b>${r.results.length - ok.length}</b> 筆。接受的委託已從清單移除，可到 <a href="${TRADER}/" target="_blank" rel="noopener">本機狀態頁</a> 查看。</p>
+    $("dlgBody").innerHTML = `<p>已送出：接受 <b>${ok.length}</b> 筆、拒絕 <b>${r.results.length - ok.length}</b> 筆。接受的委託已從清單移除，可到 ${APP ? "「委託成交」分頁" : `<a href="${TRADER}/" target="_blank" rel="noopener">本機主畫面</a>`} 查看。</p>
       <ol>${r.results.map(x => `<li>${esc(x.symbol)}：${x.ok ? "接受" : "<b>拒絕</b>"}　${esc(x.reason || "")}</li>`).join("")}</ol>
       ${r.results.some(x => x.ok && /等待進場條件/.test(x.reason || "")) ? `<p class="sum">「等待進場條件」：委託先在下單程式裡等候，進入你設的進場時間窗（且價格突破突破價）時才會送出；時間窗結束仍未觸發會自動過期。美股要台北 ${etToTpe("09:30")} 開盤後才有報價。</p>` : ""}`;
     $("dlgAckWrap").classList.add("hidden");
@@ -1090,10 +1132,126 @@ $("invTable").addEventListener("click", e => {
 });
 load(); updateBadge();
 
+/* ══════════════ 本機主畫面（由下單程式提供）與委託成交 ══════════════ */
+const ST_TXT = {armed:"等待條件",sending:"送出中",submitted:"已委託",partial:"部分成交",filled:"全部成交",cancelled:"已取消",partial_cancelled:"部分成交後取消",rejected:"失敗",expired:"已過期",unknown:"需對帳",open:"監控中",exiting:"平倉中",exit_waiting:"等候送出平倉",exit_failed:"平倉失敗",closed:"已平倉",detached:"已停止監控"};
+const PT_TXT = {MKT:"市價", LIMIT_UP:"漲停", LIMIT_DOWN:"跌停", REFERENCE:"平盤", RANGE_MKT:"範圍市價"};
+const clsPn = v => v > 0 ? "pos" : v < 0 ? "neg" : "";
+const tbl = (head, rows, empty) => `<table><thead><tr>${head.map(h => `<th${h.startsWith("#") ? ' class="num"' : ""}>${esc(h.replace(/^#/, ""))}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.join("") : `<tr><td colspan="${head.length}" style="color:var(--muted)">${esc(empty)}</td></tr>`}</tbody></table>`;
+function rulesTxt(r, market){
+  if (!r) return "—";
+  const lv = x => !x ? null : (x.type === "pct" ? `${x.value}%` : `${x.value}`);
+  const tm = hm => market === "US" ? `台北 ${etToTpe(hm)}` : hm;
+  return [r.position_type === "daytrade" ? "當沖" : "波段", lv(r.stop_loss) && "停損 " + lv(r.stop_loss), lv(r.take_profit) && "停利 " + lv(r.take_profit),
+    r.trailing_pct && `移動停利 ${r.trailing_pct}%`, r.entry_window && `進場 ${tm(r.entry_window.start)}–${tm(r.entry_window.end)}`,
+    r.breakout_price && `突破 ${r.breakout_price}`, r.exit_time && `出場 ${tm(r.exit_time)}`, r.max_hold_days && `最長 ${r.max_hold_days} 天`].filter(Boolean).join("、");
+}
+const tsTxt = ts => esc(String(ts || "").slice(5, 19).replace("T", " "));
+function renderTrade(s){
+  $("tMode").className = "modetag " + (s.mode === "live" ? "live" : "sim");
+  $("tMode").textContent = MODE_TXT[s.mode] || s.mode;
+  const d = s.day, L = s.limits;
+  $("tHalt").classList.toggle("hidden", !d.halted);
+  $("tHalt").textContent = d.halted ? "今日已停止新委託：" + d.halt_reason : "";
+  $("tDisc").classList.toggle("hidden", s.connected !== false);
+  $("tCards").innerHTML = [
+    ["今日損益（估）", `<b class="${clsPn(s.pnl_today)}">${fmtN(s.pnl_today)}</b>`, `虧損上限 ${fmtN(L.max_daily_loss)}`],
+    ["今日已實現", `<b class="${clsPn(d.realized)}">${fmtN(d.realized)}</b>`, "含手續費與稅估算；台北 06:00 換日"],
+    ["今日新委託金額", `<b>${fmtN(d.amount)}</b>`, `上限 ${fmtN(L.max_daily_amount)}、單筆 ${fmtN(L.max_order_amount)}`],
+    ["空方部位", `<b>${fmtN(s.short_exposure)}</b>`, `上限 ${fmtN(L.max_short_amount)}`],
+    ["今日委託筆數", `<b>${d.orders}</b>`, `上限 ${L.max_orders_per_day}`],
+  ].map(([a, b, c]) => `<div class="tcard"><span>${a}</span>${b}<span>${esc(c)}</span></div>`).join("");
+  $("tPos").innerHTML = tbl(["編號","市場","代號","方向","種類","#股數","#成本","#最新","#已實現","出場規則","狀態",""],
+    s.positions.map(p => `<tr><td>${esc(p.id)}</td><td>${p.market === "TW" ? "台股" : "美股"}</td><td>${esc(p.symbol)}</td><td>${p.side === "long" ? "多" : "空"}</td>
+      <td>${esc(LBL.category[p.kind] || p.kind)}／${esc((LBL.unit[p.unit] || p.unit).replace(/（.*）/, ""))}</td><td class="num">${fmtN(p.shares)}</td><td class="num">${fmtN(p.avg, 4)}</td>
+      <td class="num">${fmtN(p.last, 4)}</td><td class="num ${clsPn(p.realized)}">${fmtN(p.realized)}</td>
+      <td class="wrap">${esc(rulesTxt(p.rules, p.market))}${p.exit_reason ? `<br><small style="color:var(--muted)">${esc(p.exit_reason)}</small>` : ""}</td>
+      <td><span class="st ${esc(p.status)}">${esc(ST_TXT[p.status] || p.status)}</span></td>
+      <td>${["open","exit_waiting","exit_failed"].includes(p.status) ? `<button class="btn" type="button" data-detach="${esc(p.id)}">停止監控</button>` : ""}</td></tr>`), "沒有部位");
+  $("tOrd").innerHTML = tbl(["編號","時間","用途","市場","代號","買賣","類別","單位","價格","條件","#數量","#成交","狀態","訊息",""],
+    s.orders.map(o => { const p = o.spec; return `<tr><td>${esc(o.id)}</td><td>${tsTxt(o.created)}</td><td>${{entry:"進場",exit:"出場",close:"平倉"}[o.role] || ""}</td>
+      <td>${o.market === "TW" ? "台股" : "美股"}</td><td>${esc(p.symbol)}</td><td>${p.action === "Buy" ? "買進" : "賣出"}</td><td>${esc(LBL.category[p.category])}</td>
+      <td>${esc((LBL.unit[p.unit] || "").replace(/（.*）/, ""))}</td><td>${p.price_type === "LMT" ? fmtN(p.price, 4) : esc(PT_TXT[p.price_type] || p.price_type)}</td><td>${esc(p.tif)}</td>
+      <td class="num">${fmtN(p.qty)}</td><td class="num">${fmtN(o.filled)}${o.avg ? " @ " + fmtN(o.avg, 4) : ""}</td>
+      <td><span class="st ${esc(o.status)}">${esc(ST_TXT[o.status] || o.status)}</span></td><td class="wrap">${esc(o.msg)}</td>
+      <td>${["armed","submitted","partial"].includes(o.status) ? `<button class="btn" type="button" data-cancel="${esc(o.id)}">取消</button>` : ""}</td></tr>`; }), "沒有委託");
+  $("tFill").innerHTML = tbl(["時間","委託","市場","代號","買賣","類別","#數量","#股數","#價格"],
+    s.fills.map(f => `<tr><td>${tsTxt(f.ts)}</td><td>${esc(f.order)}</td><td>${f.market === "TW" ? "台股" : "美股"}</td><td>${esc(f.symbol)}</td>
+      <td>${f.action === "Buy" ? "買進" : "賣出"}</td><td>${esc(LBL.category[f.category])}</td><td class="num">${fmtN(f.qty)}</td><td class="num">${fmtN(f.shares)}</td><td class="num">${fmtN(f.price, 4)}</td></tr>`), "沒有成交");
+  $("tDay").innerHTML = tbl(["日期（台北 06:00 起算）","#已實現損益","#新委託金額","#委託筆數","停止新單"],
+    (s.days || []).map(x => `<tr><td>${esc(x.date)}</td><td class="num ${clsPn(x.realized)}">${fmtN(x.realized)}</td><td class="num">${fmtN(x.amount)}</td><td class="num">${x.orders}</td><td>${x.halted ? esc(x.halt_reason) : ""}</td></tr>`), "尚無資料");
+  $("tLog").innerHTML = tbl(["時間","類型","內容"], (s.log || []).map(l => `<tr><td>${tsTxt(l.ts)}</td><td>${esc(l.kind)}</td><td class="wrap">${esc(l.msg)}</td></tr>`), "沒有紀錄");
+}
+let tradeTimer = null;
+async function loadTrade(){
+  if (!ord.conn) return;
+  try{ renderTrade(await tfetch("/api/state")); }catch(e){ $("tCards").innerHTML = `<p class="errs">${esc(e.message)}</p>`; }
+}
+function watchTrade(on){
+  clearInterval(tradeTimer); tradeTimer = null;
+  if (on){ loadTrade(); tradeTimer = setInterval(() => { if (!document.hidden) loadTrade(); }, 2500); }
+}
+async function tradeAct(path, ask, body){
+  if (ask && !confirm(ask)) return;
+  try{ const j = await tfetch(path, body || {}); if (j.ok === false) alert(j.error || (j.failed || []).join("\n") || "失敗"); }
+  catch(e){ alert(e.message); }
+  loadTrade();
+}
+$("tCancelAll").addEventListener("click", () => tradeAct("/api/cancel_all", "確定刪除本程式所有未成交委託與等待中的進場單？"));
+$("tFlatAll").addEventListener("click", () => tradeAct("/api/flatten_all", "確定把本程式監控中的部位全部平倉，並停止今日新委託？"));
+$("tResume").addEventListener("click", () => tradeAct("/api/resume", "確定恢復今日新委託？"));
+$("paneTrade").addEventListener("click", e => {
+  const c = e.target.closest("[data-cancel]"); if (c) tradeAct("/api/cancel", `取消委託 ${c.dataset.cancel}？`, {id:c.dataset.cancel});
+  const d = e.target.closest("[data-detach]"); if (d) tradeAct("/api/detach", `停止監控 ${d.dataset.detach}？（不會賣出，只是不再自動出場）`, {id:d.dataset.detach});
+});
+
+/* 本機主畫面：選股資料有新版時提示更新 */
+async function checkScan(){
+  if (!APP) return;
+  try{
+    const info = await tfetch("/api/scan_info");
+    const cur = st.data?.generated_at;
+    const box = $("newScan");
+    if (info.generated_at && cur && info.generated_at !== cur){
+      const t = new Date(info.generated_at).toLocaleString("zh-TW", {hour12:false});
+      box.innerHTML = `<span>有新的選股資料（掃描時間 ${esc(t)}）</span><button class="btn" type="button" id="btnNewScan">更新</button>`;
+      box.classList.remove("hidden");
+    } else box.classList.add("hidden");
+  }catch(e){}
+}
+$("newScan").addEventListener("click", async e => {
+  if (!e.target.closest("#btnNewScan")) return;
+  try{ const o = await (await fetch("stage_scan.json", {cache:"no-store"})).json(); useData(o, true); $("newScan").classList.add("hidden"); }
+  catch(err){ alert("更新失敗：" + err.message); }
+});
+if (APP){
+  document.body.classList.add("app");
+  $("pairWrap").classList.add("hidden"); $("btnConn").classList.add("hidden");
+  connect();
+  setInterval(checkScan, 5 * 60 * 1000);
+  setTimeout(checkScan, 3000);
+}
+
+async function scanFailed(){
+  // 本機主畫面：說明選股資料為什麼沒載入，並提供重試
+  if (!APP) return;
+  try{
+    const info = await tfetch("/api/scan_info");
+    $("err").innerHTML = `${esc(info.error || "尚未下載到選股資料")}　<button class="btn" type="button" id="btnScanRetry">重新下載</button>`;
+  }catch(e){ $("err").textContent = "下單程式沒有回應，請關閉後重新開啟程式。"; }
+}
+document.addEventListener("click", async e => {
+  if (!e.target.closest("#btnScanRetry")) return;
+  $("err").textContent = "下載中…";
+  try{
+    const r = await tfetch("/api/scan_refresh", {});
+    if (!r.available) throw new Error(r.error || "下載失敗");
+    useData(await (await fetch("stage_scan.json", {cache:"no-store"})).json(), true);
+  }catch(err){ scanFailed(); }
+});
 fetch("stage_scan.json", {cache:"no-store"})
   .then(r => r.ok ? r.json() : Promise.reject())
-  .then(o => useData(o, false))
-  .catch(() => loadLast().then(o => { if (o) { try{ useData(o, false); }catch(e){} } }));
+  .then(o => useData(o, !!APP))
+  .catch(() => loadLast().then(o => { if (o) { try{ useData(o, false); }catch(e){} } else scanFailed(); }));
 })();
 </script>
 </body>

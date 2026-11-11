@@ -33,6 +33,9 @@ us_costs:                       # 美股損益估算（美元；請依你和凱�
   min_fee: 0.0                  # 每筆最低手續費（美元），例如 15
   sec_fee_rate: 0.0             # 賣出 SEC 規費率（選填，例如 0.0000278）
 
+# 選股資料（GitHub Actions 每個交易日收盤後更新）；下單程式啟動時下載，之後每 15 分鐘檢查新版
+scan_url: https://royaleo1207.github.io/stage-scan/stage_scan.json
+
 # 允許呼叫下單程式的網頁來源（127.0.0.1、localhost 一律允許）。
 # 用 file:// 直接開 index.html 時來源是 "null"，需要的話自行加入 "null"。
 allowed_origins:

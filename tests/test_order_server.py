@@ -482,7 +482,11 @@ def test_exit_retry_after_timeout_for_odd_lot():
 def test_server_pair_code_cors_and_pna():
     from http.server import ThreadingHTTPServer
     e, api, _ = setup()
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(e, "123456", ["https://royaleo1207.github.io"]))
+    from trader.scan_feed import ScanFeed
+    scan = ScanFeed(Path(tempfile.mkdtemp()), url="https://example.invalid/s.json",
+                    fetch=lambda url, etag: (200, json.dumps({"generated_at": "G1", "stocks": [{"ticker": "2330.TW"}]}).encode(), "E1"))
+    scan.refresh()
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(e, "123456", ["https://royaleo1207.github.io"], scan))
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
@@ -517,8 +521,20 @@ def test_server_pair_code_cors_and_pna():
         assert r.status == 403
         r, j = req("GET", "/api/state", headers={"X-Pair-Code": "123456"})
         assert r.status == 200 and j["orders"]
-        r, body = req("GET", "/")
+        r, body = req("GET", "/")                              # 主畫面：自動帶入權杖，不用輸入配對碼
+        html = body.decode("utf-8")
+        assert r.status == 200 and '<meta name="trader-token" content="123456">' in html and "下單面板" in html
+        assert r.getheader("X-Frame-Options") == "DENY" and r.getheader("Access-Control-Allow-Origin") is None
+        r, body = req("GET", "/", headers={"Origin": "https://evil.example"})
+        assert r.getheader("Access-Control-Allow-Origin") is None              # 其他網站讀不到權杖
+        r, body = req("GET", "/status")
         assert r.status == 200 and "下單程式狀態" in body.decode("utf-8")
+        r, j = req("GET", "/stage_scan.json")
+        assert r.status == 200 and j["generated_at"] == "G1"
+        r, j = req("GET", "/api/scan_info", headers={"X-Pair-Code": "123456"})
+        assert j["generated_at"] == "G1" and j["available"]
+        r, j = req("GET", "/api/scan_info")
+        assert r.status == 401
     finally:
         srv.shutdown()
         srv.server_close()
@@ -676,6 +692,30 @@ def test_config_validation_catches_mistakes():
             raise AssertionError(bad)
         except ValueError as e:
             assert word in str(e), (bad, str(e))
+
+
+def test_scan_feed_downloads_and_keeps_last_good_copy():
+    from trader.scan_feed import ScanFeed
+    calls = []
+    good = json.dumps({"generated_at": "2026-11-11T22:30:00+00:00", "stocks": [{"ticker": "AAPL"}]}).encode()
+    replies = [(200, good, "E1"), (304, b"", "E1"), RuntimeError("網路中斷"), (200, "<html>維護中</html>".encode(), None),
+               (200, good.replace(b"22:30", b"23:30"), "E2")]
+
+    def fetch(url, etag):
+        calls.append(etag)
+        r = replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    d = Path(tempfile.mkdtemp())
+    f = ScanFeed(d, url="https://example.invalid/s.json", fetch=fetch)
+    assert f.refresh() is True and f.read_bytes() == good
+    assert f.refresh() is False and calls[-1] == "E1"           # 沒更新：用 ETag，不重新下載
+    assert f.refresh() is False and "網路中斷" in f.info()["error"] and f.read_bytes() == good
+    assert f.refresh() is False and "格式錯誤" in f.info()["error"] and f.read_bytes() == good
+    assert f.refresh() is True and "23:30" in f.info()["generated_at"] and f.info()["error"] is None
+    g = ScanFeed(d, url="https://example.invalid/s.json", fetch=fetch)  # 重啟後記得上次的版本
+    assert g.info()["generated_at"] == f.info()["generated_at"]
 
 
 def test_web_page_capabilities_match_server():
