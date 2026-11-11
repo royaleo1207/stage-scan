@@ -660,6 +660,24 @@ def test_us_premarket_ticks_do_not_fill_or_trigger():
     assert p["status"] == "open"
 
 
+def test_config_validation_catches_mistakes():
+    from trader.order_server import load_cfg
+    d = Path(tempfile.mkdtemp())
+    assert load_cfg(d / "none.yaml")["costs"]["fee_discount"] == 1.0          # 預設值本身合法
+    (d / "c.yaml").write_text("costs:\n  fee_discount: 0.28\nus_costs:\n  fee_rate: 0.001\n", encoding="utf-8")
+    c = load_cfg(d / "c.yaml")
+    assert c["costs"]["fee_discount"] == 0.28 and c["costs"]["fee_rate"] == 0.001425 and c["us_costs"]["fee_rate"] == 0.001
+    for bad, word in (("costs:\n  fee_discount: 2.8\n", "0.28"), ("us_costs:\n  fee_rate: 0.25\n", "0.0025"),
+                      ("costs:\n  fee_rate: abc\n", "需為數字"), ("costs:\n  feerate: 0.1\n", "不認得"),
+                      ("costs：\n  fee_discount: 0.28\n", "格式錯誤")):
+        (d / "b.yaml").write_text(bad, encoding="utf-8")
+        try:
+            load_cfg(d / "b.yaml")
+            raise AssertionError(bad)
+        except ValueError as e:
+            assert word in str(e), (bad, str(e))
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

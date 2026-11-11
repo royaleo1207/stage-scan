@@ -39,10 +39,64 @@ STATUS_PAGE = HERE / "status_page.html"
 MAX_BODY = 512 * 1024
 
 
-def load_cfg(user_path: Path | None = None) -> dict:
-    base = yaml.safe_load(CFG_DEFAULTS.read_text(encoding="utf-8")) or {}
+# 設定值範圍（含端點）：填錯（例如手續費折扣 2.8 折填成 2.8）時啟動就停下來說明
+CFG_RANGES = {
+    "risk.max_order_amount": (1, None, "單筆金額上限（台幣）"),
+    "risk.max_daily_amount": (1, None, "單日新委託總金額上限（台幣）"),
+    "risk.max_daily_loss": (1, None, "單日最大虧損（台幣）"),
+    "risk.max_short_amount": (0, None, "空方部位總金額上限（台幣）"),
+    "risk.max_orders_per_day": (1, 10000, "單日委託筆數上限"),
+    "risk.usd_twd": (10, 100, "美元兌台幣匯率，例如 31.5"),
+    "exits.tw_odd_slip_ticks": (0, 50, "零股出場檔數"),
+    "exits.us_slip_pct": (0, 10, "美股出場價差 %，例如 0.5"),
+    "exits.retry_sec": (3, 600, "出場重掛秒數"),
+    "exits.max_retries": (0, 50, "出場重送次數"),
+    "costs.fee_rate": (0, 0.01, "台股手續費率，0.1425% 填 0.001425"),
+    "costs.fee_discount": (0, 1, "台股手續費折扣，2.8 折填 0.28、6 折填 0.6、無折扣填 1.0"),
+    "costs.min_fee": (0, 1000, "台股每筆最低手續費（元）"),
+    "costs.tax_rate": (0, 0.01, "證交稅率，0.3% 填 0.003"),
+    "costs.tax_day_trade": (0, 0.01, "當沖證交稅率，0.15% 填 0.0015"),
+    "costs.slippage_ticks": (0, 20, "滑價檔數"),
+    "us_costs.fee_rate": (0, 0.05, "美股手續費率，0.25% 填 0.0025"),
+    "us_costs.min_fee": (0, 500, "美股每筆最低手續費（美元）"),
+    "us_costs.sec_fee_rate": (0, 0.001, "SEC 規費率"),
+}
+
+
+def validate_cfg(cfg: dict) -> None:
+    errs = []
+    for key, (lo, hi, hint) in CFG_RANGES.items():
+        sec, k = key.split(".")
+        v = (cfg.get(sec) or {}).get(k)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            errs.append(f"{key} 需為數字，收到 {v!r}（{hint}）")
+        elif v < lo or (hi is not None and v > hi):
+            rng = f"{lo}～{hi}" if hi is not None else f"至少 {lo}"
+            errs.append(f"{key} = {v} 超出範圍 {rng}（{hint}）")
+    if cfg.get("exits", {}).get("tw_common_price") not in ("limit_updown", "market"):
+        errs.append("exits.tw_common_price 只能是 limit_updown 或 market")
+    if not isinstance(cfg.get("enforce_hours_in_simulation"), bool):
+        errs.append("enforce_hours_in_simulation 只能是 true 或 false")
+    if not isinstance(cfg.get("allowed_origins"), list):
+        errs.append("allowed_origins 需為清單")
+    if errs:
+        raise ValueError("設定有誤，請修改 trader/order_config.yaml（不要改 order_defaults.yaml）：\n  - " + "\n  - ".join(errs))
+
+
+def _read_yaml(p: Path) -> dict:
+    try:
+        d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(f"{p.name} 格式錯誤（冒號、縮排請用半形空白）：{e}") from None
+    if not isinstance(d, dict):
+        raise ValueError(f"{p.name} 格式錯誤：最外層必須是「項目: 值」")
+    return d
+
+
+def load_cfg(user_path: Path | None = None, defaults_path: Path | None = None) -> dict:
+    base = _read_yaml(Path(defaults_path or CFG_DEFAULTS))
     p = Path(user_path or CFG_USER)
-    over = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
+    over = _read_yaml(p) if p.exists() else {}
 
     def merge(a, b, pre=""):
         out = dict(a)
@@ -51,7 +105,9 @@ def load_cfg(user_path: Path | None = None) -> dict:
                 raise ValueError(f"order_config.yaml 有不認得的項目：{pre}{k}")
             out[k] = merge(a[k], v, f"{pre}{k}.") if isinstance(a[k], dict) else v
         return out
-    return merge(base, over)
+    cfg = merge(base, over)
+    validate_cfg(cfg)
+    return cfg
 
 
 def origin_allowed(origin: str | None, allowed: list[str]) -> bool:
@@ -225,7 +281,11 @@ def main(argv: list[str] | None = None) -> int:
     if a.live and not confirm_live():
         print("未輸入 YES，已取消。")
         return 1
-    cfg = load_cfg()
+    try:
+        cfg = load_cfg()
+    except ValueError as e:
+        print(f"[錯誤] {e}")
+        return 3
     store = Store()
     from .kgi_gateway import BrokerError, KgiBroker
     if a.dry_run:
