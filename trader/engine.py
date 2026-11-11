@@ -58,6 +58,8 @@ class Engine:
         self.last: dict[str, float] = {}          # "TW:2330:0" → 最新價
         self.connected = True
         broker.set_handlers(self.on_broker_event, self.on_tick)
+        if hasattr(broker, "clock"):
+            broker.clock = self.now
 
     # ── 小工具 ──
     @property
@@ -495,6 +497,10 @@ class Engine:
     def on_tick(self, market: str, symbol: str, odd: bool, price: float, ts: str = "") -> None:
         with self.lock:
             self.last[self.qkey(market, symbol, odd)] = price
+            # 盤前、盤後的成交價（美股行情在盤前也會推送）不觸發進場與停損停利
+            if (market == "US" or self._check_hours()) and \
+                    not mh.can_match(market, "odd" if odd else "common", self.now(), self.holidays):
+                return
             changed = False
             for o in list(self.d["orders"].values()):
                 if o["status"] == "armed" and o["market"] == market and o["spec"]["symbol"] == symbol and \

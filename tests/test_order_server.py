@@ -634,6 +634,32 @@ def test_us_fees_in_realized_pnl():
     assert p["status"] == "closed" and round(p["realized"]) == round((100 - 15 - 15) * 32)
 
 
+def test_us_premarket_ticks_do_not_fill_or_trigger():
+    """台北 17:10＝美東 04:10 盤前：凱基行情會推送盤前成交價，但不可成交、不可觸發。"""
+    kgi = FakeKgi()
+    br = KgiBroker(kgi_module=kgi, simulation=False, dry_run=True)
+    br.login("A1", "pw", "9801234", "9805678")
+    clock = Clock("2026-11-11T17:10:00")
+    e = Engine(br, Store(tempfile.mkdtemp()), {}, live=False, clock=clock)
+    api = kgi.api
+    plan(e, us(qty=1, price=310.0), us(symbol="FDS", qty=1, price=330.0, exit={"breakout_price": 325}))
+    api.USQuote.push("AAPL", 305.0)
+    api.USQuote.push("FDS", 326.0)
+    assert not e.d["positions"]
+    assert [o["status"] for o in e.d["orders"].values()] == ["submitted", "armed"]
+    clock.set("2026-11-11T22:31:00")                    # 開盤後
+    api.USQuote.push("AAPL", 305.0)
+    api.USQuote.push("FDS", 326.0)
+    assert len(e.d["positions"]) == 2                   # 開盤後 AAPL 成交；FDS 突破、送出並成交
+    # 持有中的部位：盤後價格不觸發停損
+    plan(e, us(symbol="MSFT", qty=1, price=400.0, exit={"stop_loss": {"type": "pct", "value": 1}}))
+    api.USQuote.push("MSFT", 400.0)
+    clock.set("2026-11-12T05:30:00")                    # 美東 16:30 盤後
+    api.USQuote.push("MSFT", 380.0)
+    p = [x for x in e.d["positions"].values() if x["symbol"] == "MSFT"][0]
+    assert p["status"] == "open"
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

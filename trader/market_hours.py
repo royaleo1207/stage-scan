@@ -53,6 +53,26 @@ def tw_in_session(now: datetime, holidays: set[date] | None = None) -> bool:
     return _is_weekday(t.date(), holidays) and TW_OPEN <= t.time() <= TW_CLOSE
 
 
+# 台股撮合時段（單位 → 起, 迄）：開盤前 08:30–09:00 只收單不成交
+TW_MATCH_WINDOW = {
+    "common": (time(9, 0), time(13, 30)),
+    "odd": (time(9, 0), time(13, 30)),
+    "odd_after": (time(13, 40), time(14, 30)),
+    "fixing": (time(14, 0), time(14, 30)),
+}
+
+
+def can_match(market: str, unit: str, now: datetime, holidays: set[date] | None = None) -> bool:
+    """這個時間是否為正規撮合時段（美股不含盤前盤後；凱基複委託在盤前盤後只收預約單）。"""
+    if market == "US":
+        return us_in_session(now, holidays)
+    t = now.astimezone(TPE)
+    if not _is_weekday(t.date(), holidays):
+        return False
+    lo, hi = TW_MATCH_WINDOW.get(unit, TW_MATCH_WINDOW["common"])
+    return lo <= t.time() <= hi
+
+
 def us_session(day: date) -> tuple[datetime, datetime]:
     """某個美東日期的開盤、收盤時間（帶時區）。"""
     return datetime.combine(day, US_OPEN, NY), datetime.combine(day, US_CLOSE, NY)

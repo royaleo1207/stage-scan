@@ -30,6 +30,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
+from . import market_hours as mh
 from .kgi_spec import OrderSpec
 
 US_FAIL_STATUS = {"委託失敗", "處理失敗", "無效單", "作癈單", "作廢單", "逾期單"}
@@ -94,7 +95,8 @@ class KgiBroker:
         self._last_place = 0.0
         self.raw_info: dict[str, dict] = {}
         self._reconnecting = False
-        self._closing = False     # 最近一次庫存查詢：券商回傳幾列、有哪些欄位（只供診斷）
+        self._closing = False
+        self.clock: Callable[[], datetime] = mh.now_tpe    # Engine 建立時會換成它的時鐘     # 最近一次庫存查詢：券商回傳幾列、有哪些欄位（只供診斷）
 
     # ── 連線與帳號 ──
     def login(self, person_id: str, password: str, tw_account: str | None, us_account: str | None) -> list[dict]:
@@ -127,7 +129,7 @@ class KgiBroker:
             self.api.set_SubAccount(self.us_account)
             self.api.SubOrder.set_event(lambda ev: self._sdk_event("US", ev))
         if self.simulation or self.dry_run:
-            self.sim = LocalSim(lambda e: self._on_event(e))
+            self.sim = LocalSim(lambda e: self._on_event(e), clock=lambda: self.clock())
         if hasattr(self.api, "Quote"):
             self.api.Quote.set_cb_tick(self._tw_tick)
         if hasattr(self.api, "USQuote"):
@@ -468,8 +470,9 @@ class LocalSim:
     IOC／FOK 限價單若當下無法成交就取消。不模擬部分成交、排隊與漲跌停鎖死，結果會比實際樂觀。
     """
 
-    def __init__(self, emit: Callable[[dict], None]):
+    def __init__(self, emit: Callable[[dict], None], clock: Callable[[], datetime] | None = None):
         self.emit = emit
+        self.clock = clock or mh.now_tpe
         self.orders: dict[str, dict] = {}
         self.pos: dict[str, int] = {}
         self.last: dict[tuple, float] = {}
@@ -510,6 +513,8 @@ class LocalSim:
     def _try(self, lid: str, price: float) -> None:
         o = self.orders[lid]
         s = o["spec"]
+        if not mh.can_match(s.market, s.unit, self.clock()):
+            return      # 盤前、盤後或休市的價格不成交（美股盤前推送的成交價也不算）
         if s.price_type != "LMT":
             fill = price
         elif (s.action == "Buy" and price <= s.price) or (s.action == "Sell" and price >= s.price):

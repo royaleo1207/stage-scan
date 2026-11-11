@@ -130,6 +130,8 @@ class _SubOrder:
         self.calls, self.cancels, self.cb = [], [], None
         self._ids = itertools.count(1)
         self.contracts = {"AAPL.O": SimpleNamespace(market="US", board_lot=1),
+                          "FDS.N": SimpleNamespace(market="US", board_lot=1),
+                          "MSFT.O": SimpleNamespace(market="US", board_lot=1),
                           "0700.HK": SimpleNamespace(market="HK", board_lot=100)}
         self.trades = {}
 
