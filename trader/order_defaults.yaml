@@ -20,13 +20,18 @@ exits:
 
 enforce_hours_in_simulation: false   # 模擬環境是否也檢查交易時段（凱基模擬環境營業日 08:30～隔日 05:00 可下單）
 
-costs:                          # 損益估算用（台股）
-  fee_rate: 0.001425
-  fee_discount: 1.0
-  min_fee: 20
-  tax_rate: 0.003
-  tax_day_trade: 0.0015
+costs:                          # 台股損益估算（買賣各收手續費，賣出收證交稅）
+  fee_rate: 0.001425            # 手續費率（法定上限 0.1425%）
+  fee_discount: 1.0             # 手續費折扣，例如 2.8 折填 0.28
+  min_fee: 20                   # 每筆最低手續費（元）
+  tax_rate: 0.003               # 一般賣出證交稅 0.3%
+  tax_day_trade: 0.0015         # 現股當沖賣出證交稅 0.15%
   slippage_ticks: 1
+
+us_costs:                       # 美股損益估算（美元；請依你和凱基約定的複委託費率填寫）
+  fee_rate: 0.0                 # 手續費率，例如 0.25% 填 0.0025
+  min_fee: 0.0                  # 每筆最低手續費（美元），例如 15
+  sec_fee_rate: 0.0             # 賣出 SEC 規費率（選填，例如 0.0000278）
 
 # 允許呼叫下單程式的網頁來源（127.0.0.1、localhost 一律允許）。
 # 用 file:// 直接開 index.html 時來源是 "null"，需要的話自行加入 "null"。

@@ -214,12 +214,20 @@ class FakeApi:
 
     def set_Account(self, a):  # noqa: N802
         self.selected.append(("證券", a))
+        self._old_trades = self.Order.trades
 
     def set_SubAccount(self, a):  # noqa: N802
         self.selected.append(("複委託", a))
 
     def set_disconnect_cb(self, f):
-        pass
+        self.disconnect_cb = f
+
+    def login(self):            # 官方重登範例：在斷線回呼內呼叫既有物件的 api.login()
+        self.relogins = getattr(self, "relogins", 0) + 1
+        self.Order = _Order(self)       # 重新登入後 Order 物件重建、舊的 callback 失效
+        self.Order.trades = self._old_trades
+        self.Quote.subs.clear()
+        self.USQuote.subs.clear()
 
     def logout(self):
         pass

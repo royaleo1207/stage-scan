@@ -583,6 +583,57 @@ def test_dry_run_logs_in_live_but_never_sends():
     assert [o for o in e2.d["orders"].values()][-1]["status"] == "cancelled"
 
 
+def test_reconnect_restores_callbacks_subscriptions_and_fills():
+    e, api, _ = setup()
+    plan(e, tw(qty=2, exit={"stop_loss": {"type": "pct", "value": 2}}))
+    c = api.Order.calls[-1]
+    api.Order.emit(Task.Deal, c["order_id"], qty=1, price=100.0)      # 斷線前成交 1 張
+    br = e.broker
+    br.RECONNECT_WAITS = (0,)
+    # 斷線期間又成交 1 張（回報收不到），券商資料裡有
+    from types import SimpleNamespace
+    api.Order.trades[c["order_id"]].order_status.deals = [SimpleNamespace(quantity=1, price=100.0),
+                                                          SimpleNamespace(quantity=1, price=100.0)]
+    api.disconnect_cb()
+    import time
+    for _ in range(50):
+        if getattr(api, "relogins", 0) and e.connected:
+            break
+        time.sleep(0.05)
+    assert api.relogins == 1 and e.connected
+    assert ("2330", False) in api.Quote.subs                          # 行情重新訂閱
+    p = only_pos(e)
+    assert p["shares"] == 2000                                        # 補上斷線期間的成交
+    api.Quote.push("2330", 97.0)                                      # 新的 Order 物件也能收到平倉單
+    assert api.Order.calls[-1]["action"] == Action.Sell and api.Order.calls[-1]["qty"] == 2
+
+
+def test_disconnected_blocks_new_orders_and_defers_exit():
+    e, api, _ = setup()
+    plan(e, tw(qty=1, exit={"stop_loss": {"type": "pct", "value": 2}}))
+    fill_last(api, price=100.0)
+    e.on_broker_event({"kind": "disconnected", "local_id": None})
+    r = e.submit_plan({"items": [tw()]})["results"][0]
+    assert not r["ok"] and "連線中斷" in r["reason"]
+    api.Quote.push("2330", 97.0)
+    assert len(api.Order.calls) == 1 and only_pos(e)["status"] == "exit_waiting"
+    e.connected = True
+    e.on_timer()
+    assert api.Order.calls[-1]["action"] == Action.Sell
+
+
+def test_us_fees_in_realized_pnl():
+    e, api, _ = setup(now="2026-11-10T23:00:00", live=True,
+                      cfg={"us_costs": {"fee_rate": 0.0025, "min_fee": 15.0, "sec_fee_rate": 0.0}})
+    plan(e, us(qty=10, price=200.0, exit={"take_profit": {"type": "pct", "value": 5}}))
+    api.SubOrder.emit(Task.Deal, api.SubOrder.calls[-1]["org_seqnum"], qty=10, price=200.0)
+    api.USQuote.push("AAPL", 210.0)
+    api.SubOrder.emit(Task.Deal, api.SubOrder.calls[-1]["org_seqnum"], qty=10, price=210.0)
+    p = [x for x in e.d["positions"].values()][0]
+    # 價差 100 美元 − 買進手續費 15（2000×0.25%=5，未達最低 15）− 賣出手續費 15（2100×0.25%=5.25→15）＝ 70 美元 × 32
+    assert p["status"] == "closed" and round(p["realized"]) == round((100 - 15 - 15) * 32)
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

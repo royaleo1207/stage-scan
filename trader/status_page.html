@@ -55,8 +55,10 @@ input{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--lin
   </div>
   <p class="muted" style="margin:6px 0 0">「全部取消」刪除本程式送出的所有未成交委託與等待中的進場單；「全部平倉」另外把本程式監控中的部位全部平倉，並停止今日新委託。都不會動到你在其他軟體下的單。</p>
   <div class="halt hidden" id="halt"></div>
+  <div class="halt hidden" id="disc">券商連線中斷，下單程式正在自動重新登入；重連前不送新委託，觸發的出場會在重連後立即送出。</div>
   <div class="cards" id="cards"></div>
   <h2>部位與出場規則</h2><div class="tbl"><table id="tPos"></table></div>
+  <h2>每日統計</h2><div class="tbl"><table id="tDay"></table></div>
   <h2>委託</h2><div class="tbl"><table id="tOrd"></table></div>
   <h2>成交</h2><div class="tbl"><table id="tFill"></table></div>
   <h2>券商庫存 <button id="bInv" type="button">重新查詢</button></h2><div class="tbl"><table id="tInv"></table></div>
@@ -102,9 +104,13 @@ function render(s){
   const d = s.day, L = s.limits;
   $("halt").classList.toggle("hidden", !d.halted);
   $("halt").textContent = d.halted ? "今日已停止新委託：" + d.halt_reason : "";
+  $("disc").classList.toggle("hidden", s.connected !== false);
+  $("tDay").innerHTML = `<tr><th>日期（台北 06:00 起算）</th><th class="num">已實現損益</th><th class="num">新委託金額</th><th class="num">委託筆數</th><th>停止新單</th></tr>` +
+    ((s.days || []).length ? s.days.map(x => `<tr><td>${esc(x.date)}</td><td class="num ${cls(x.realized)}">${n0(x.realized)}</td><td class="num">${n0(x.amount)}</td><td class="num">${x.orders}</td><td>${x.halted ? esc(x.halt_reason) : ""}</td></tr>`).join("")
+      : `<tr><td colspan="5" class="muted">尚無資料</td></tr>`);
   $("cards").innerHTML = [
     ["今日損益（估）", `<b class="${cls(s.pnl_today)}">${n0(s.pnl_today)}</b>`, `虧損上限 ${n0(L.max_daily_loss)}`],
-    ["今日已實現", `<b class="${cls(d.realized)}">${n0(d.realized)}</b>`, "含手續費與交易稅估算"],
+    ["今日已實現", `<b class="${cls(d.realized)}">${n0(d.realized)}</b>`, "含手續費與交易稅估算；每天台北 06:00 換日"],
     ["今日新委託金額", `<b>${n0(d.amount)}</b>`, `上限 ${n0(L.max_daily_amount)}，單筆 ${n0(L.max_order_amount)}`],
     ["空方部位", `<b>${n0(s.short_exposure)}</b>`, `上限 ${n0(L.max_short_amount)}`],
     ["今日委託筆數", `<b>${d.orders}</b>`, `上限 ${L.max_orders_per_day}`],
@@ -145,7 +151,7 @@ async function loadInv(){
     $("tInv").innerHTML = `<tr><th>市場</th><th>代號</th><th>名稱</th><th>種類</th><th class="num">股數</th><th class="num">成本</th><th class="num">最新</th><th>監控</th></tr>` +
       (j.items.length ? j.items.map(r => `<tr><td>${esc(r.market)}</td><td>${esc(r.symbol)}</td><td>${esc(r.name)}</td><td>${esc({cash:"現股",odd:"零股",margin:"融資",short:"融券",lend:"借券"}[r.kind])}</td>
         <td class="num">${n0(r.shares)}</td><td class="num">${n2(r.avg)}</td><td class="num">${n2(r.last)}</td><td>${esc(r.monitored_by || "")}</td></tr>`).join("")
-        : `<tr><td colspan="8" class="muted">沒有庫存。${esc(Object.entries(j.raw || {}).map(([m, r]) => `${m} 券商回傳 ${r.rows} 列` + (r.rows ? `，欄位：${r.columns.join("、")}` : "")).join("；"))}</td></tr>`) + (j.errors.length ? `<tr><td colspan="8" class="err">${esc(j.errors.join("；"))}</td></tr>` : "");
+        : `<tr><td colspan="8" class="muted" style="white-space:normal">沒有庫存。${esc(Object.entries(j.raw || {}).map(([m, r]) => `${m} 券商回傳 ${r.rows} 列` + (r.rows ? `，欄位：${r.columns.join("、")}` : "")).join("；"))}</td></tr>`) + (j.errors.length ? `<tr><td colspan="8" class="err">${esc(j.errors.join("；"))}</td></tr>` : "");
   }catch(e){ $("tInv").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; }
 }
 let timer;

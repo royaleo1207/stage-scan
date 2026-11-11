@@ -92,7 +92,9 @@ class KgiBroker:
         # 凱基測試說明要求模擬環境的下單間隔大於 1 秒；正式環境預設不限制
         self.min_interval = 1.1 if simulation else 0.0
         self._last_place = 0.0
-        self.raw_info: dict[str, dict] = {}     # 最近一次庫存查詢：券商回傳幾列、有哪些欄位（只供診斷）
+        self.raw_info: dict[str, dict] = {}
+        self._reconnecting = False
+        self._closing = False     # 最近一次庫存查詢：券商回傳幾列、有哪些欄位（只供診斷）
 
     # ── 連線與帳號 ──
     def login(self, person_id: str, password: str, tw_account: str | None, us_account: str | None) -> list[dict]:
@@ -135,6 +137,7 @@ class KgiBroker:
         return accounts
 
     def logout(self):
+        self._closing = True
         if self.api is not None and hasattr(self.api, "logout"):
             self.api.logout()
 
@@ -160,9 +163,62 @@ class KgiBroker:
     def set_handlers(self, on_event, on_tick):
         self._on_event, self._on_tick = on_event, on_tick
 
+    # ── 斷線自動重連 ──
+    RECONNECT_WAITS = (5, 15, 30, 60, 120, 300)     # 秒；之後每 300 秒再試，直到成功或程式結束
+
     def _disconnected(self):
-        self._log("error", "SuperPy 斷線：請確認網路後重新啟動下單程式（啟動時會自動接續監控與對帳）")
+        # SDK 的斷線回呼在 SDK 執行緒中，不可在這裡阻塞：另開執行緒重連
+        self._log("error", "SuperPy 斷線，開始自動重新登入")
         self._on_event({"kind": "disconnected", "local_id": None, "msg": "斷線"})
+        if self._reconnecting or self._closing:
+            return
+        self._reconnecting = True
+        threading.Thread(target=self._reconnect_loop, daemon=True).start()
+
+    def _reconnect_loop(self):
+        n = 0
+        try:
+            while not self._closing:
+                wait = self.RECONNECT_WAITS[min(n, len(self.RECONNECT_WAITS) - 1)]
+                time.sleep(wait)
+                n += 1
+                try:
+                    if self.relogin():
+                        self._log("reconnect", f"第 {n} 次重新登入成功，已恢復帳號、回報與 {len(self._subs)} 檔行情訂閱")
+                        self._on_event({"kind": "reconnected", "local_id": None, "msg": "重新登入成功"})
+                        return
+                    self._log("error", f"第 {n} 次重新登入失敗，{self.RECONNECT_WAITS[min(n, len(self.RECONNECT_WAITS) - 1)]} 秒後再試")
+                except Exception as e:  # noqa: BLE001  重連失敗不可讓執行緒結束
+                    self._log("error", f"第 {n} 次重新登入發生錯誤：{e}")
+        finally:
+            self._reconnecting = False
+
+    def relogin(self) -> bool:
+        """依官方重登範例呼叫既有物件的 api.login()，再恢復帳號、回報 callback 與行情訂閱。"""
+        self.api.login()
+        accounts = {str(r.get("account")) for r in (self.api.show_account() or [])}
+        need = {a for a in (self.tw_account, self.us_account) if a}
+        if not need or not need <= accounts:
+            return False
+        if self.tw_account:
+            self.api.set_Account(self.tw_account)
+            self.api.Order.set_event(lambda ev: self._sdk_event("TW", ev))
+        if self.us_account and not self.simulation:
+            self.api.set_SubAccount(self.us_account)
+            self.api.SubOrder.set_event(lambda ev: self._sdk_event("US", ev))
+        if hasattr(self.api, "Quote"):
+            self.api.Quote.set_cb_tick(self._tw_tick)
+        if hasattr(self.api, "USQuote"):
+            self.api.USQuote.set_cb_tick(self._us_tick)
+        if hasattr(self.api, "set_disconnect_cb"):
+            self.api.set_disconnect_cb(self._disconnected)
+        subs, self._subs = set(self._subs), set()
+        for m, sym, odd in subs:
+            try:
+                self.subscribe(m, sym, odd)
+            except Exception as e:  # noqa: BLE001
+                self._log("error", f"重新訂閱 {m} {sym} 失敗：{e}")
+        return True
 
     # ── 商品、信用、庫存 ──
     def tw_contract(self, symbol: str) -> dict | None:

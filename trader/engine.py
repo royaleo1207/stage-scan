@@ -31,6 +31,7 @@ DEFAULT_CFG = {
         "max_retries": 5,
     },
     "enforce_hours_in_simulation": False,    # 凱基模擬環境營業日 08:30～隔日 05:00 都可下單，預設不檢查時段
+    "us_costs": {"fee_rate": 0.0, "min_fee": 0.0, "sec_fee_rate": 0.0},
     "costs": {"fee_rate": 0.001425, "fee_discount": 1.0, "min_fee": 20, "tax_rate": 0.003,
               "tax_day_trade": 0.0015, "slippage_ticks": 1},
 }
@@ -55,6 +56,7 @@ class Engine:
         self.risk = RiskManager(RiskLimits.from_cfg(self.cfg["risk"]))
         self.lock = threading.RLock()
         self.last: dict[str, float] = {}          # "TW:2330:0" → 最新價
+        self.connected = True
         broker.set_handlers(self.on_broker_event, self.on_tick)
 
     # ── 小工具 ──
@@ -242,6 +244,8 @@ class Engine:
     def _precheck(self, spec: OrderSpec, rules: xr.ExitRules | None, side: str | None,
                   for_send: bool = False) -> str | None:
         now = self.now()
+        if not self.connected:
+            return "券商連線中斷，自動重新登入中，請稍後再送"
         daytrade = bool(rules and rules.position_type == "daytrade")
         if spec.market == "TW":
             if not self.broker.has_tw:
@@ -377,7 +381,12 @@ class Engine:
             lid = ev.get("local_id")
             o = self.d["orders"].get(lid) if lid else None
             if ev.get("kind") == "disconnected":
-                self.log("error", "券商連線中斷")
+                self.connected = False
+                self.log("error", "券商連線中斷，自動重新登入中；期間不送新委託")
+                return
+            if ev.get("kind") == "reconnected":
+                self.connected = True
+                self.reconcile_after_reconnect()
                 return
             if o is None:
                 self.log("event", f"未對應的回報：{ev.get('task')} {ev.get('status')} {ev.get('symbol')} {ev.get('msg')}",
@@ -459,6 +468,11 @@ class Engine:
             dt = p["entry_date"] == mh.tw_trade_date(self.now()).isoformat()
             cost = twse.trade_cost(price * sh, "sell" if p["side"] == "long" else "buy", self.cfg["costs"], dt) + \
                 twse.trade_cost(p["avg"] * sh, "buy" if p["side"] == "long" else "sell", self.cfg["costs"], dt)
+        else:   # 美股：買進、賣出各收一次手續費（美元），賣出另收 SEC 規費
+            uc = self.cfg["us_costs"]
+            fee = lambda amt: max(uc["min_fee"], amt * uc["fee_rate"]) if amt > 0 else 0.0  # noqa: E731
+            sell_amt = price * sh if p["side"] == "long" else p["avg"] * sh
+            cost = self.risk.to_twd("US", fee(price * sh) + fee(p["avg"] * sh) + sell_amt * uc["sec_fee_rate"])
         pnl = self.risk.to_twd(p["market"], gross) - cost
         p["shares"] -= sh
         p["realized"] = p.get("realized", 0.0) + pnl
@@ -600,6 +614,12 @@ class Engine:
         if src and src["status"] in ACTIVE:
             self.cancel_order(src["id"], "出場前刪除未成交的進場單")
         specs = self._exit_spec(p)
+        if not self.connected:
+            p["status"] = "exit_waiting"
+            if p.get("wait_logged") != "disconnected":
+                p["wait_logged"] = "disconnected"
+                self.log("exit_wait", f"{p['id']} 出場條件成立（{why}），但券商斷線中，重連後立即送出", position=p["id"])
+            return
         if self._check_hours():
             for s in specs:
                 ok, w = self._can_order_now(s)
@@ -769,6 +789,22 @@ class Engine:
             self.log("restart", n)
         return notes
 
+    def reconcile_after_reconnect(self) -> None:
+        """重新登入後，用券商的委託資料補上斷線期間的成交（不重送任何委託）。"""
+        n = 0
+        for o in self.d["orders"].values():
+            oid = o.get("order_id") or o.get("org_seqnum")
+            if o["status"] not in ("submitted", "partial") or not oid or str(oid).startswith("SIM"):
+                continue
+            info = self.broker.reattach(o["id"], o["market"], oid)
+            if info is None:
+                self.log("error", f"{o['id']} {o['spec']['symbol']} 重連後查不到這筆委託，請到券商軟體對帳", order=o["id"])
+            elif info["filled"] > o["filled"]:
+                self._on_deal(o, info["filled"] - o["filled"], info["avg"] or 0, {})
+                n += 1
+        self.log("reconnect", f"重連後對帳完成" + (f"，補上 {n} 筆斷線期間的成交" if n else "，沒有遺漏的成交"))
+        self.store.save()
+
     # ── 狀態 ──
     def snapshot(self) -> dict:
         with self.lock:
@@ -788,6 +824,8 @@ class Engine:
                 "us_dst": mh.utc_offset_hours("US", self.now()) == -4,
                 "us_flatten_tpe": mh.us_flatten_time(self.now()).astimezone(mh.TPE).strftime("%H:%M"),
                 "log": self.store.tail_log(150)[::-1],
+                "connected": self.connected,
+                "days": [dict(v, date=k) for k, v in sorted(self.d["days"].items(), reverse=True)[:10]],
             }
 
     def inventory(self) -> dict:
