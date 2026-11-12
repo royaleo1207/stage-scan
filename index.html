@@ -311,6 +311,7 @@ body.need-login #loader, body.need-login #app, body.need-login #topActs{display:
         <button class="btn primary lgbtn" type="submit">開始使用</button>
         <p class="err" id="acErr" role="alert"></p>
       </form>
+      <p class="lgnote"><button type="button" class="linkbtn" data-quit>結束程式</button></p>
       <p class="lgnote">帳號密碼只在你的電腦上使用，不會上傳。勾選「記住密碼」時，密碼存在 Windows「認證管理員」。第一次使用前，請先依凱基說明安裝 CA 憑證並簽署 API 同意書。</p>
     </div>
   </section>
@@ -1309,7 +1310,7 @@ function renderUserBar(s){
   let bar = $("userBar");
   if (!bar){ bar = document.createElement("div"); bar.id = "userBar"; bar.className = "userbar"; box.prepend(bar); }
   bar.innerHTML = s.static ? "" : `<span><b>${esc(s.user)}</b></span><span class="modetag ${s.mode === "live" ? "live" : "sim"}">${esc(MODE_TXT[s.mode] || s.mode)}</span>
-    <span>台股 ${esc(s.tw_account || "未使用")}・美股 ${esc(s.us_account || "未使用")}</span><button class="btn" type="button" id="btnLogout">登出</button>`;
+    <span>台股 ${esc(s.tw_account || "未使用")}・美股 ${esc(s.us_account || "未使用")}</span><button class="btn" type="button" id="btnLogout">登出</button><button class="btn" type="button" data-quit>結束程式</button>`;
 }
 async function refreshSession(){
   clearTimeout(sessTimer);
@@ -1354,6 +1355,13 @@ $("acctForm").addEventListener("submit", async e => {
     if (!r.ok){ $("acErr").textContent = r.error; return; }
   }catch(err){ $("acErr").textContent = err.message; return; }
   refreshSession();
+});
+document.addEventListener("click", async e => {
+  if (!e.target.closest("[data-quit]")) return;
+  const open = SESSION && ord.conn ? (await tfetch("/api/state").catch(() => ({positions:[]}))).positions.filter(p => ["open","exiting","exit_waiting"].includes(p.status)).length : 0;
+  if (!confirm((open ? `目前有 ${open} 個部位由程式監控停損停利，結束後會停止監控（部位不會賣出，下次登入同一模式會接續）。\n\n` : "") + "確定結束下單程式？")) return;
+  try{ const r = await tfetch("/api/quit", {}); if (!r.ok){ alert(r.error); return; } }catch(err){}
+  document.body.innerHTML = `<div class="wrap"><div class="lgbox"><h2>下單程式已結束</h2><p class="lghint">可以關閉這個視窗。要再使用時，雙擊 StageScanTrader.pyw。</p></div></div>`;
 });
 document.addEventListener("click", async e => {
   if (!e.target.closest("#btnLogout")) return;

@@ -28,10 +28,10 @@
 3. 開「命令提示字元」，進到專案資料夾（`cd C:\路徑\stage-scan`），安裝套件：
 
 ```bash
-python -m pip install -U kgisuperpy pandas numpy pyyaml tzdata
+python -m pip install -U kgisuperpy pandas numpy pyyaml tzdata pywebview
 ```
 
-`tzdata` 是 Windows 計算美東夏令／冬令時間需要的時區資料，不能省略。
+`tzdata` 是 Windows 計算美東夏令／冬令時間需要的時區資料，不能省略；`pywebview` 用來開獨立的程式視窗（沒裝會改用瀏覽器）。
 
 正式環境另外需要：凱基證券帳戶、簽署「證券 API 服務風險預告書暨使用同意書」、有效的 CA 憑證（依凱基說明安裝憑證元件並申請）。複委託 API 需另外向營業員申請開通。
 
@@ -53,7 +53,11 @@ notepad trader\.env
 
 ### 主畫面（建議）
 
-在專案資料夾雙擊 **`start.bat`**，會開啟主畫面並顯示登入畫面：
+在專案資料夾雙擊 **`StageScanTrader.pyw`**，會開啟獨立的程式視窗（不會出現黑色命令視窗）並顯示登入畫面。
+可以在檔案上按右鍵 →「傳送到」→「桌面（建立捷徑）」，之後從桌面開啟。
+需要看程式訊息時改用 `start.bat`（會顯示命令視窗）；沒有命令視窗時，訊息寫在 `trader/runtime/console.log`。
+關閉視窗或按右上角「結束程式」會結束下單程式；已經開著時再雙擊，只會再開一個視窗連到原本的程式。
+
 
 1. 輸入身分證字號、密碼，可勾選「記住密碼」（存在 Windows 認證管理員；下次打開程式自動登入）。
 2. 選模式：**演練**（正式登入、本機模擬成交、不送單）、**凱基模擬環境**、**正式下單**（需輸入「確認」；為了安全，正式模式即使記住密碼也不會自動登入）。

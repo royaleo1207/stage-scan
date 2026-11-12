@@ -875,6 +875,45 @@ def test_server_login_endpoints():
         srv.server_close()
 
 
+def test_desktop_services_quit_and_single_instance():
+    from trader.order_server import Services, existing_instance, load_cfg
+    import time
+    app, _ = _app()
+    svc = Services(port=0, cfg=load_cfg(Path(tempfile.mkdtemp()) / "none.yaml"), app=app, runtime=Path(tempfile.mkdtemp()))
+    svc.scan.fetch = lambda url, etag: (304, b"", None)
+    closed = []
+    svc.quit_hooks.append(lambda: closed.append(True))       # 例如關掉程式視窗
+    svc.start_background(serve=True)
+    assert existing_instance(svc.port)                        # 第二次雙擊時會偵測到
+    c = http.client.HTTPConnection("127.0.0.1", svc.port, timeout=5)
+    c.request("GET", "/", headers={"Host": f"127.0.0.1:{svc.port}"})
+    html = c.getresponse().read().decode("utf-8")
+    assert "data-quit" in html and f'content="{svc.pair}"' in html
+    c = http.client.HTTPConnection("127.0.0.1", svc.port, timeout=5)
+    c.request("POST", "/api/quit", "{}", {"Host": f"127.0.0.1:{svc.port}", "X-Pair-Code": svc.pair,
+                                          "Content-Type": "application/json"})
+    assert json.loads(c.getresponse().read())["ok"]
+    for _ in range(50):
+        if svc._closed and not existing_instance(svc.port):
+            break
+        time.sleep(0.05)
+    assert closed and svc.stop.is_set() and not existing_instance(svc.port)
+
+
+def test_desktop_redirects_console_output():
+    from trader import desktop
+    d = Path(tempfile.mkdtemp())
+    old = sys.stdout, sys.stderr
+    try:
+        log = desktop.redirect_output(d)
+        print("SuperPy 訊息")
+        sys.stdout.flush()
+    finally:
+        sys.stdout, sys.stderr = old
+    assert "SuperPy 訊息" in log.read_text(encoding="utf-8")
+    assert (ROOT / "StageScanTrader.pyw").exists()
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

@@ -134,7 +134,7 @@ def app_page(pair_code: str) -> bytes:
     return html.replace(TOKEN_META, f'<meta name="trader-token" content="{pair_code}">', 1).encode("utf-8")
 
 
-def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None):
+def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, on_quit=None):
     """target：App（主畫面登入流程）或已登入的 Engine（指令列模式、測試）。"""
     from .app_session import StaticApp
     app = target if hasattr(target, "session") else StaticApp(target)
@@ -312,6 +312,12 @@ def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None):
             if path == "/api/logout":
                 ok, err = app.logout()
                 return self._json(200, {"ok": ok, "error": err})
+            if path == "/api/quit":                 # 主畫面的「結束程式」
+                if on_quit is None:
+                    return self._json(200, {"ok": False, "error": "指令列模式請在終端機按 Ctrl+C 結束"})
+                self._json(200, {"ok": True})
+                threading.Timer(0.3, on_quit).start()
+                return
             if path == "/api/forget_password":
                 app.forget_password()
                 return self._json(200, {"ok": True})
@@ -377,6 +383,80 @@ def run_app_timer(app, stop: threading.Event, every: float = 1.0) -> None:
         stop.wait(every)
 
 
+class Services:
+    """主畫面模式的下單程式：HTTP 伺服器、登入流程、計時器、選股資料下載。"""
+
+    def __init__(self, port: int = PORT, cfg: dict | None = None, app=None, runtime: Path | None = None):
+        from .app_session import App
+        from .kgi_gateway import KgiBroker
+        from .scan_feed import ScanFeed
+        from .secret_store import default_store
+        load_env()
+        self.cfg = cfg or load_cfg()
+        self.runtime = Path(runtime or RUNTIME)
+        self.runtime.mkdir(parents=True, exist_ok=True)
+        self.log = _applog_factory(self.runtime)
+        if app is None:
+            app = App(self.cfg, self.runtime, default_store(),
+                      broker_factory=lambda simulation, dry_run: KgiBroker(simulation=simulation, dry_run=dry_run,
+                                                                            log=self.log),
+                      log=self.log)
+            env_pid = os.environ.get("KGI_PERSON_ID", "")
+            if not app.profile.get("person_id") and env_pid:
+                app.profile["person_id"] = env_pid.upper()   # 第一次使用時帶入 .env 的身分證字號
+        self.app = app
+        self.pair = os.environ.get("PAIR_CODE") or f"{secrets.randbelow(10**6):06d}"
+        self.scan = ScanFeed(self.runtime, url=self.cfg["scan_url"], log=self.log)
+        self.quit_hooks: list = []
+        self.srv = ThreadingHTTPServer((HOST, port), make_handler(app, self.pair, self.cfg.get("allowed_origins", []),
+                                                                  self.scan, on_quit=self.request_quit))
+        self.port = self.srv.server_address[1]
+        self.url = f"http://{HOST}:{self.port}/"
+        self.stop = threading.Event()
+        self._closed = False
+
+    def start_background(self, serve: bool = True) -> None:
+        threading.Thread(target=run_app_timer, args=(self.app, self.stop), daemon=True).start()
+        threading.Thread(target=self.scan.run, args=(self.stop,), daemon=True).start()
+        if serve:
+            threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.app.auto_login()
+
+    def request_quit(self) -> None:
+        """「結束程式」或關閉視窗：先通知外層（例如關掉視窗），再停止服務。"""
+        for f in list(self.quit_hooks):
+            try:
+                f()
+            except Exception:  # noqa: BLE001
+                pass
+        self.shutdown()
+
+    def shutdown(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.stop.set()
+        app = self.app
+        if app.engine is not None:
+            app.engine.store.save()
+            app.engine.store.log("stop", "下單程式結束")
+        try:
+            app.logout()
+        except Exception:  # noqa: BLE001
+            pass
+        threading.Thread(target=self.srv.shutdown, daemon=True).start()
+
+
+def existing_instance(port: int = PORT) -> bool:
+    """這台電腦是否已經有下單程式在執行（避免開第二個）。"""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://{HOST}:{port}/api/ping", timeout=1.5) as r:
+            return json.loads(r.read().decode("utf-8")).get("app") == "stage-scan-trader"
+    except (OSError, ValueError):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="階段掃描本機下單程式（凱基 SuperPy）")
     ap.add_argument("--live", action="store_true", help="正式環境：用 .env 的帳密直接登入（需輸入 YES）")
@@ -397,10 +477,9 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     RUNTIME.mkdir(parents=True, exist_ok=True)
     applog = _applog_factory(RUNTIME)
-    from .app_session import App, MODES, StaticApp
+    from .app_session import MODES, StaticApp
     from .kgi_gateway import BrokerError, KgiBroker
     from .scan_feed import ScanFeed
-    from .secret_store import default_store
 
     env_pid, env_pwd = os.environ.get("KGI_PERSON_ID", ""), os.environ.get("KGI_PERSON_PWD", "")
     legacy = (a.live or a.dry_run) and env_pid and env_pwd
@@ -425,28 +504,37 @@ def main(argv: list[str] | None = None) -> int:
         for n in engine.resume_after_restart():
             print("[接續]", n)
         app = StaticApp(engine)
+        pair = os.environ.get("PAIR_CODE") or f"{secrets.randbelow(10**6):06d}"
+        scan = ScanFeed(RUNTIME, url=cfg["scan_url"], log=applog)
+        srv = ThreadingHTTPServer((HOST, a.port), make_handler(app, pair, cfg.get("allowed_origins", []), scan))
+        stop = threading.Event()
+        threading.Thread(target=run_app_timer, args=(app, stop), daemon=True).start()
+        threading.Thread(target=scan.run, args=(stop,), daemon=True).start()
+        print("=" * 60)
+        print(f"  模式：{MODES[mode]}　台股 {broker.tw_account or '未設定'}　複委託 {broker.us_account or '未設定'}")
+        print(f"  主畫面：http://{HOST}:{a.port}/")
+        print(f"  配對碼：{pair}（只有從 GitHub 網頁連線時需要；主畫面會自動帶入）")
+        print("  按 Ctrl+C 結束（狀態已存檔，下次啟動會接續監控）")
+        print("=" * 60)
     else:
-        app = App(cfg, RUNTIME, default_store(),
-                  broker_factory=lambda simulation, dry_run: KgiBroker(simulation=simulation, dry_run=dry_run, log=applog),
-                  log=applog)
-        if not app.profile.get("person_id") and env_pid:
-            app.profile["person_id"] = env_pid.upper()       # 第一次使用時帶入 .env 的身分證字號
+        if existing_instance(a.port):
+            print(f"下單程式已經在執行中：http://{HOST}:{a.port}/")
+            if not a.no_browser:
+                import webbrowser
+                webbrowser.open(f"http://{HOST}:{a.port}/")
+            return 0
         if a.live or a.dry_run:
-            app.profile["mode"] = "live" if a.live else "dry_run"
-
-    pair = os.environ.get("PAIR_CODE") or f"{secrets.randbelow(10**6):06d}"
-    scan = ScanFeed(RUNTIME, url=cfg["scan_url"], log=applog)
-    srv = ThreadingHTTPServer((HOST, a.port), make_handler(app, pair, cfg.get("allowed_origins", []), scan))
-    stop = threading.Event()
-    threading.Thread(target=run_app_timer, args=(app, stop), daemon=True).start()
-    threading.Thread(target=scan.run, args=(stop,), daemon=True).start()
-    if not legacy and app.auto_login():
-        print("已記住密碼，自動登入中…")
-    print("=" * 60)
-    print(f"  主畫面：http://{HOST}:{a.port}/" + ("（請在畫面上登入）" if not legacy else ""))
-    print(f"  配對碼：{pair}（只有從 GitHub 網頁連線時需要；主畫面會自動帶入）")
-    print("  按 Ctrl+C 結束（狀態已存檔，下次啟動會接續監控）")
-    print("=" * 60)
+            print("trader/.env 沒有帳密，改用主畫面登入。")
+        svc = Services(a.port, cfg)
+        if a.live or a.dry_run:
+            svc.app.profile["mode"] = "live" if a.live else "dry_run"
+        svc.start_background(serve=False)
+        app, srv, scan, stop, pair = svc.app, svc.srv, svc.scan, svc.stop, svc.pair
+        print("=" * 60)
+        print(f"  主畫面：{svc.url}（請在畫面上登入）")
+        print(f"  配對碼：{pair}（只有從 GitHub 網頁連線時需要；主畫面會自動帶入）")
+        print("  按 Ctrl+C 結束（狀態已存檔，下次啟動會接續監控）")
+        print("=" * 60)
     if not a.no_browser:
         import webbrowser
         threading.Timer(1.0, lambda: webbrowser.open(f"http://{HOST}:{a.port}/")).start()
