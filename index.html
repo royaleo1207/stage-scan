@@ -283,6 +283,9 @@ body.web .tabs, body.web .pick, body.web #orderBar{display:none!important}
 .dlbox a.btn.primary{color:var(--bg)}
 .newscan small{color:var(--muted)}
 .lgnote a{color:var(--focus)}
+.setrow{margin:0 0 12px;max-width:520px}
+.setrow small{color:var(--muted);font-size:12px}
+body.web #paneSet{display:none!important}
 </style>
 </head>
 <body>
@@ -356,6 +359,7 @@ body.web .tabs, body.web .pick, body.web #orderBar{display:none!important}
       <button type="button" role="tab" id="tabOrder" aria-controls="paneOrder" aria-selected="false">下單面板<span class="badge" id="ordBadge"></span></button>
       <button type="button" role="tab" id="tabInv" aria-controls="paneInv" aria-selected="false">我的庫存</button>
       <button type="button" role="tab" id="tabTrade" aria-controls="paneTrade" aria-selected="false">委託成交</button>
+      <button type="button" role="tab" id="tabSet" aria-controls="paneSet" aria-selected="false">設定</button>
     </nav>
     <div id="paneScan" role="tabpanel" aria-labelledby="tabScan">
     <section class="cycle" aria-label="各階段檔數">
@@ -455,6 +459,19 @@ body.web .tabs, body.web .pick, body.web #orderBar{display:none!important}
       <h3 class="sec">成交</h3><div class="invt" id="tFill"></div>
       <h3 class="sec">每日統計</h3><div class="invt" id="tDay"></div>
       <details class="why" style="margin-top:14px"><summary>操作紀錄</summary><div class="invt" id="tLog" style="margin-top:8px"></div></details>
+    </section>
+
+    <section id="paneSet" role="tabpanel" aria-labelledby="tabSet" class="hidden">
+      <form id="setForm" class="ocard">
+        <p class="sum" style="margin-top:0">修改後按「儲存」立即生效，不用重新開啟程式。金額上限依你的資金自行決定；平倉單（停損停利、強制平倉、全部平倉）不受金額上限限制。</p>
+        <div id="setFields"></div>
+        <div class="oacts">
+          <button class="btn primary" type="submit">儲存</button>
+          <button class="btn" type="button" id="setDefaults">全部恢復預設值</button>
+        </div>
+        <p class="err" id="setErr" role="alert"></p>
+        <p class="sum" id="setMsg" aria-live="polite"></p>
+      </form>
     </section>
 
     <dialog id="dlg" aria-labelledby="dlgTitle">
@@ -1007,17 +1024,19 @@ $("list").addEventListener("change", e => {
 
 /* 分頁 */
 function showTab(name){
-  for (const [t, p] of [["tabScan","paneScan"],["tabOrder","paneOrder"],["tabInv","paneInv"],["tabTrade","paneTrade"]]){
+  for (const [t, p] of [["tabScan","paneScan"],["tabOrder","paneOrder"],["tabInv","paneInv"],["tabTrade","paneTrade"],["tabSet","paneSet"]]){
     const on = p === name; $(t).setAttribute("aria-selected", String(on)); $(p).classList.toggle("hidden", !on);
   }
   if (name === "paneOrder") renderOrders();
   if (name === "paneInv" && ord.conn) loadInv();
   watchTrade(name === "paneTrade");
+  if (name === "paneSet") loadSettings();
 }
 $("tabScan").addEventListener("click", () => showTab("paneScan"));
 $("tabOrder").addEventListener("click", () => showTab("paneOrder"));
 $("tabInv").addEventListener("click", () => showTab("paneInv"));
 $("tabTrade").addEventListener("click", () => showTab("paneTrade"));
+$("tabSet").addEventListener("click", () => showTab("paneSet"));
 $("btnGoOrder").addEventListener("click", () => { showTab("paneOrder"); window.scrollTo({top:0}); });
 document.querySelector(".tabs").addEventListener("keydown", e => {
   const tabs = [...document.querySelectorAll(".tabs [role=tab]")], i = tabs.indexOf(document.activeElement);
@@ -1194,6 +1213,68 @@ $("invTable").addEventListener("click", e => {
   document.querySelector(`.ocard[data-id="${ord.items[ord.items.length - 1].id}"]`)?.scrollIntoView({block:"center"});
 });
 load(); updateBadge();
+
+/* ══════════════ 設定（風控上限、手續費、出場） ══════════════ */
+// [區塊, 項目, 名稱, 單位, 說明, 畫面數字＝儲存值 × scale]
+const SET_FIELDS = [
+  ["h", "風控上限（台幣）"],
+  ["risk", "max_order_amount", "單筆金額上限", "元", "一筆新委託的最大金額；美股依匯率換算", 1],
+  ["risk", "max_daily_amount", "單日新委託總金額上限", "元", "取消、未成交的部分會退回額度", 1],
+  ["risk", "max_daily_loss", "單日最大虧損", "元", "已實現＋未實現達到後，停止新委託並平掉當沖部位", 1],
+  ["risk", "max_short_amount", "空方部位總金額上限", "元", "融券、借券賣出、現股當沖先賣；填 0 表示不允許放空", 1],
+  ["risk", "max_orders_per_day", "單日新委託筆數上限", "筆", "", 1],
+  ["risk", "usd_twd", "美元兌台幣匯率", "", "用來換算美股金額與損益", 1],
+  ["h", "手續費（損益估算用）"],
+  ["costs", "fee_discount", "台股手續費折扣", "折", "例如 2.8 折填 2.8；沒有折扣填 10", 10],
+  ["costs", "min_fee", "台股每筆最低手續費", "元", "", 1],
+  ["us_costs", "fee_rate", "美股手續費率", "%", "例如 0.1% 填 0.1", 100],
+  ["us_costs", "min_fee", "美股每筆最低手續費", "美元", "", 1],
+  ["h", "下單與出場"],
+  ["general", "tw_off_hours", "台股非交易時段下單", "", "", 0, {send:"照常送給凱基（可能成為預約單，和凱基 App 一樣）", reject:"程式直接擋下"}],
+  ["exits", "tw_common_price", "台股整股出場價格", "", "停損停利、強制平倉時使用", 0, {limit_updown:"跌停價賣出／漲停價買回（ROD，等同立即成交）", market:"市價（IOC）"}],
+  ["exits", "us_slip_pct", "美股出場掛價", "%", "複委託只能限價：以最新價往不利方向多少 % 掛單", 1],
+  ["exits", "tw_odd_slip_ticks", "零股出場掛價", "檔", "零股只能限價：以最新價往不利方向幾檔掛單", 1],
+];
+let SET_DEFAULTS = null;
+const fmtSet = (v, scale) => v == null ? "" : String(+(v * scale).toFixed(6));
+function renderSettings(values){
+  $("setFields").innerHTML = SET_FIELDS.map(f => {
+    if (f[0] === "h") return `<h3 class="sec">${esc(f[1])}</h3>`;
+    const [sec, k, name, unit, hint, scale, choices] = f, v = values[sec]?.[k];
+    const input = choices
+      ? `<select data-sec="${sec}" data-k="${k}">${Object.entries(choices).map(([c, t]) => `<option value="${c}"${c === v ? " selected" : ""}>${esc(t)}</option>`).join("")}</select>`
+      : `<input data-sec="${sec}" data-k="${k}" data-scale="${scale}" inputmode="decimal" value="${esc(fmtSet(v, scale))}">`;
+    return `<label class="fld setrow"><span>${esc(name)}${unit ? `（${esc(unit)}）` : ""}</span>${input}${hint ? `<small>${esc(hint)}</small>` : ""}</label>`;
+  }).join("");
+}
+async function loadSettings(){
+  $("setErr").textContent = ""; $("setMsg").textContent = "";
+  try{ const j = await tfetch("/api/settings"); SET_DEFAULTS = j.defaults; renderSettings(j.values); $("setMsg").textContent = "設定檔：" + j.path; }
+  catch(e){ $("setErr").textContent = e.message; }
+}
+$("setForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const values = {};
+  for (const el of $("setFields").querySelectorAll("[data-k]")){
+    const sec = el.dataset.sec, k = el.dataset.k;
+    let v = el.value.trim();
+    if (el.tagName === "INPUT"){
+      const n = Number(v.replace(/,/g, ""));
+      if (v === "" || !isFinite(n)){ $("setErr").textContent = `「${el.closest("label").querySelector("span").textContent}」需為數字`; el.focus(); return; }
+      v = +(n / Number(el.dataset.scale)).toFixed(10);   // 避免 2.8÷10 變成 0.27999999999999997
+    }
+    (values[sec] ||= {})[k] = v;
+  }
+  if (ord.conn?.mode === "live" && values.risk && values.risk.max_order_amount > (ord.conn.limits?.max_order_amount || 0) &&
+      !confirm(`正式模式：單筆上限將改為 ${fmtN(values.risk.max_order_amount)} 元，確定？`)) return;
+  try{
+    const r = await tfetch("/api/settings", {values});
+    if (!r.ok){ $("setErr").textContent = r.error; return; }
+    $("setErr").textContent = ""; $("setMsg").textContent = "已儲存，立即生效。"; renderSettings(r.values);
+    if (ord.conn){ try{ ord.conn = {...ord.conn, ...(await (await fetch(TRADER + "/api/ping")).json())}; }catch(err){} }
+  }catch(err){ $("setErr").textContent = err.message; }
+});
+$("setDefaults").addEventListener("click", () => { if (SET_DEFAULTS && confirm("把所有項目恢復成預設值？（按「儲存」後才生效）")) renderSettings(SET_DEFAULTS); });
 
 /* ══════════════ 本機主畫面（由下單程式提供）與委託成交 ══════════════ */
 const ST_TXT = {armed:"等待條件",sending:"送出中",submitted:"已委託",partial:"部分成交",filled:"全部成交",cancelled:"已取消",partial_cancelled:"部分成交後取消",rejected:"失敗",expired:"已過期",unknown:"需對帳",open:"監控中",exiting:"平倉中",exit_waiting:"等候送出平倉",exit_failed:"平倉失敗",closed:"已平倉",detached:"已停止監控"};

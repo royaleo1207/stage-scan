@@ -62,6 +62,12 @@ class Engine:
         if hasattr(broker, "clock"):
             broker.clock = self.now
 
+    def apply_cfg(self, cfg: dict) -> None:
+        """畫面上修改設定後立即生效（風控上限、手續費、出場價格等）。"""
+        with self.lock:
+            self.cfg = _deep_merge(DEFAULT_CFG, cfg or {})
+            self.risk.limits = RiskLimits.from_cfg(self.cfg["risk"])
+
     # ── 小工具 ──
     @property
     def d(self) -> dict:

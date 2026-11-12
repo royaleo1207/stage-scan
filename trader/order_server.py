@@ -117,6 +117,70 @@ def load_cfg(user_path: Path | None = None, defaults_path: Path | None = None) -
     return cfg
 
 
+# 主畫面「設定」分頁可以修改的項目
+EDITABLE = {
+    "risk": ("max_order_amount", "max_daily_amount", "max_daily_loss", "max_short_amount", "max_orders_per_day",
+             "usd_twd"),
+    "costs": ("fee_discount", "min_fee"),
+    "us_costs": ("fee_rate", "min_fee"),
+    "exits": ("tw_common_price", "us_slip_pct", "tw_odd_slip_ticks"),
+    "": ("tw_off_hours",),
+}
+
+
+def editable_values(cfg: dict) -> dict:
+    out = {}
+    for sec, keys in EDITABLE.items():
+        src = cfg if sec == "" else cfg.get(sec, {})
+        out[sec or "general"] = {k: src.get(k) for k in keys}
+    return out
+
+
+def save_settings(values: dict, user_path: Path | None = None, defaults_path: Path | None = None) -> dict:
+    """把畫面上改的設定存進 order_config.yaml（只記錄和預設不同的項目），檢查不通過就不存。"""
+    up = Path(user_path or CFG_USER)
+    defaults = _read_yaml(Path(defaults_path or CFG_DEFAULTS))
+    user = _read_yaml(up) if up.exists() else {}
+    for sec, keys in EDITABLE.items():
+        given = values.get(sec or "general") or {}
+        for k in keys:
+            if k not in given:
+                continue
+            v = given[k]
+            if isinstance(v, str) and k not in ("tw_common_price", "tw_off_hours"):
+                try:
+                    v = float(v.replace(",", ""))
+                except ValueError:
+                    raise ValueError(f"{k} 需為數字") from None
+            if isinstance(v, float):
+                v = int(v) if v.is_integer() else round(v, 10)
+            if sec:
+                user.setdefault(sec, {})[k] = v
+            else:
+                user[k] = v
+    # 和預設相同的項目不寫入，檔案保持簡短
+    for sec in list(user):
+        if isinstance(user[sec], dict):
+            for k in list(user[sec]):
+                if (defaults.get(sec) or {}).get(k) == user[sec][k]:
+                    del user[sec][k]
+            if not user[sec]:
+                del user[sec]
+        elif defaults.get(sec) == user[sec]:
+            del user[sec]
+    tmp = up.with_suffix(".tmp.yaml")
+    up.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text("# 由主畫面「設定」分頁儲存；也可以直接編輯（可設定的項目見程式資料夾的 order_defaults.yaml）\n" +
+                   yaml.safe_dump(user, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    try:
+        cfg = load_cfg(tmp, defaults_path)           # 整份檢查，不合法就丟出 ValueError、不覆蓋原檔
+    except ValueError:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, up)
+    return cfg
+
+
 def origin_allowed(origin: str | None, allowed: list[str]) -> bool:
     if not origin:
         return False
@@ -138,7 +202,7 @@ def app_page(pair_code: str) -> bytes:
 
 
 def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, on_quit=None, on_show=None,
-                 updates=None):
+                 updates=None, settings_path: Path | None = None):
     """target：App（主畫面登入流程）或已登入的 Engine（指令列模式、測試）。"""
     from .app_session import StaticApp
     app = target if hasattr(target, "session") else StaticApp(target)
@@ -287,6 +351,11 @@ def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, 
                 return
             if path == "/api/session":
                 return self._json(200, app.session())
+            if path == "/api/settings":
+                cfg = getattr(app, "cfg", None) or (app.engine.cfg if app.engine else load_cfg(settings_path))
+                return self._json(200, {"values": editable_values(cfg),
+                                        "defaults": editable_values(load_cfg(CFG_DEFAULTS.with_name("__no_user_config__.yaml"))),
+                                        "path": str(settings_path or CFG_USER)})
             if path == "/api/version":
                 from .version import __version__
                 return self._json(200, updates.info() if updates else {"current": __version__, "newer": False})
@@ -332,6 +401,18 @@ def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, 
                 self._json(200, {"ok": True})
                 threading.Timer(0.3, on_quit).start()
                 return
+            if path == "/api/settings":
+                try:
+                    cfg = save_settings(body.get("values") or {}, settings_path)
+                except ValueError as e:
+                    return self._json(200, {"ok": False, "error": str(e)})
+                if hasattr(app, "cfg") and isinstance(app.cfg, dict):
+                    app.cfg.clear()
+                    app.cfg.update(cfg)
+                if app.engine is not None:
+                    app.engine.apply_cfg(cfg)
+                    app.engine.log("settings", "使用者在畫面上修改設定：" + json.dumps(body.get("values"), ensure_ascii=False))
+                return self._json(200, {"ok": True, "values": editable_values(cfg)})
             if path == "/api/forget_password":
                 app.forget_password()
                 return self._json(200, {"ok": True})

@@ -988,6 +988,41 @@ def test_armed_entry_expires_at_session_close():
     assert o["status"] == "expired" and api.Order.calls == []
 
 
+def test_settings_page_saves_and_applies_immediately():
+    from http.server import ThreadingHTTPServer
+    import yaml
+    d = Path(tempfile.mkdtemp())
+    up = d / "order_config.yaml"
+    e, api, _ = setup(cfg={"risk": {"max_order_amount": 5000}})
+    assert not plan(e, tw(qty=1, price=100.0))[0]["ok"]                     # 10 萬超過 5,000
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(e, "T", [], settings_path=up))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(method, path, body=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        h = {"Host": f"127.0.0.1:{port}", "X-Pair-Code": "T", "Content-Type": "application/json"}
+        c.request(method, path, json.dumps(body) if body is not None else None, h)
+        return json.loads(c.getresponse().read())
+    try:
+        j = req("GET", "/api/settings")
+        assert j["defaults"]["risk"]["max_order_amount"] == 300000
+        r = req("POST", "/api/settings", {"values": {"risk": {"max_order_amount": 1000000, "max_daily_amount": 3000000},
+                                                     "costs": {"fee_discount": 0.28}, "general": {"tw_off_hours": "reject"}}})
+        assert r["ok"], r
+        assert e.risk.limits.max_order_amount == 1000000 and e.cfg["tw_off_hours"] == "reject"   # 不用重開就生效
+        saved = yaml.safe_load(up.read_text(encoding="utf-8"))
+        assert saved["risk"]["max_order_amount"] == 1000000 and saved["costs"]["fee_discount"] == 0.28
+        assert "max_daily_loss" not in saved["risk"]                         # 和預設相同的不寫入
+        assert plan(e, tw(qty=1, price=100.0))[0]["ok"]                      # 現在 10 萬可以下
+        bad = req("POST", "/api/settings", {"values": {"costs": {"fee_discount": 2.8}}})
+        assert not bad["ok"] and "0.28" in bad["error"]                       # 畫面送錯值會被擋下
+        assert yaml.safe_load(up.read_text(encoding="utf-8"))["costs"]["fee_discount"] == 0.28   # 原檔沒被覆蓋
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re
