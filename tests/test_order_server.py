@@ -940,7 +940,7 @@ def test_update_checker_and_data_folder():
     old = os.environ.get("STAGE_SCAN_DATA")
     try:
         os.environ["STAGE_SCAN_DATA"] = "/tmp/x"
-        assert str(paths.data_dir()) == "/tmp/x"
+        assert paths.data_dir() == Path("/tmp/x")
         del os.environ["STAGE_SCAN_DATA"]
         assert paths.data_dir() == paths.TRADER_DIR             # 原始碼執行：資料在 trader/
     finally:
