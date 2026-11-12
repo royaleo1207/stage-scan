@@ -139,6 +139,9 @@ class Engine:
         rules = xr.ExitRules.from_dict(it.get("exit"))
         side = position_side(spec.action, spec.category) if spec.market == "TW" else (
             "long" if spec.action == "Buy" else None)
+        if rules and rules.position_type == "swing" and rules.exit_time and not rules.max_hold_days:
+            return {"ok": False, "reason": "波段的「出場時間」只在持有滿「最長持有天數」那天使用：請填最長持有天數，"
+                                          "或要當天平倉請把部位類型改成「當沖」"}
         if rules and not side:
             return {"ok": False, "reason": "出場規則只能加在開倉單（買進現股／融資、融券賣出、借券賣出、現股當沖先賣、美股買進）"}
         if spec.category == "daytrade_short":
@@ -405,7 +408,11 @@ class Engine:
                 self.connected = False
                 self.log("error", "券商連線中斷，自動重新登入中；期間不送新委託")
                 return
+            if ev.get("kind") == "reconnect_failed":
+                self.log("error", f"第 {ev.get('attempt')} 次重新登入失敗：{ev.get('msg')}")
+                return
             if ev.get("kind") == "reconnected":
+                self.log("reconnect", ev.get("msg") or "重新登入成功")
                 self.connected = True
                 self.reconcile_after_reconnect()
                 return
@@ -915,6 +922,7 @@ class Engine:
                 "us_flatten_tpe": mh.us_flatten_time(self.now()).astimezone(mh.TPE).strftime("%H:%M"),
                 "log": self.store.tail_log(150)[::-1],
                 "connected": self.connected,
+                "reconnect": dict(getattr(self.broker, "reconnect_info", {}) or {}),
                 "days": [dict(v, date=k) for k, v in sorted(self.d["days"].items(), reverse=True)[:10]],
             }
 

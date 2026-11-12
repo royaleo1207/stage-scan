@@ -452,7 +452,7 @@ body.web #paneSet{display:none!important}
         <span class="msg">「全部取消」刪除本程式送出的所有未成交委託與等待中的進場單；「全部平倉」另外把本程式監控中的部位全部平倉，並停止今日新委託。都不會動到你在其他軟體下的單。</span>
       </div>
       <div class="tbanner hidden" id="tHalt" role="alert"></div>
-      <div class="tbanner hidden" id="tDisc" role="alert">券商連線中斷，正在自動重新登入；重連前不送新委託，觸發的出場會在重連後立即送出。</div>
+      <div class="tbanner hidden" id="tDisc" role="alert"><span id="tDiscText"></span> <button class="btn" type="button" id="tReconnect">立即重新連線</button></div>
       <div class="tcards" id="tCards"></div>
       <h3 class="sec">部位與出場規則</h3><div class="invt" id="tPos"></div>
       <h3 class="sec">委託</h3><div class="invt" id="tOrd"></div>
@@ -863,6 +863,8 @@ function errsOf(it){
     if (ex.ws && ex.we && mkTime(it, ex.ws) >= mkTime(it, ex.we)) e.push("進場時間窗的結束需晚於開始" + (it.market === "US" ? "（以美東時間比較）" : ""));
     const any = [ex.slV, ex.tpV, ex.tr, ex.bo, ex.ws, ex.et, ex.mh].some(v => v !== "" && v != null) || ex.pt === "daytrade";
     if (!any) e.push("出場規則至少設定一項（或取消「加掛出場規則」）");
+    if (ex.pt === "swing" && ex.et && (ex.mh === "" || ex.mh == null))
+      e.push("波段的「出場時間」只在持有滿「最長持有天數」那天使用：請填最長持有天數，或要當天平倉請把部位類型改成「當沖」");
     const sd = sideOf(it), ref = it.kind === "order" ? estPrice(it) : +it.position.avg;
     if (sd && ref){
       if (ex.slT === "price" && num(ex.slV) != null && (sd === "long" ? num(ex.slV) >= ref : num(ex.slV) <= ref)) e.push(`${sd === "long" ? "多方停損價應低於" : "空方停損價應高於"}進場參考價 ${ref}`);
@@ -910,7 +912,7 @@ function exitHTML(it){
       ${isPos ? "" : `<label class="fld"><span>進場時間窗起（${tzName}）</span><input data-f="ex.ws" type="time" value="${esc(ex.ws)}"></label>
       <label class="fld"><span>進場時間窗迄</span><input data-f="ex.we" type="time" value="${esc(ex.we)}"></label>
       <label class="fld"><span>突破價進場（${sd === "long" ? "≥" : "≤"} 此價才送單）</span><input data-f="ex.bo" type="number" step="any" min="0" value="${esc(ex.bo)}"></label>`}
-      <label class="fld"><span>出場時間（${tzName}）</span><input data-f="ex.et" type="time" value="${esc(ex.et)}"></label>
+      <label class="fld"><span>${ex.pt === "daytrade" ? `當沖平倉時間（${tzName}）` : `出場時間（${tzName}，持有滿最長天數那天）`}</span><input data-f="ex.et" type="time" value="${esc(ex.et)}"></label>
       <label class="fld"><span>波段最長持有天數</span><input data-f="ex.mh" type="number" step="1" min="1" value="${esc(ex.mh)}"${ex.pt === "daytrade" ? " disabled" : ""}></label>
     </div>${tzHint(it)}</div>`;
 }
@@ -1298,6 +1300,12 @@ function renderTrade(s){
   $("tHalt").classList.toggle("hidden", !d.halted);
   $("tHalt").textContent = d.halted ? "今日已停止新委託：" + d.halt_reason : "";
   $("tDisc").classList.toggle("hidden", s.connected !== false);
+  if (s.connected === false){
+    const r = s.reconnect || {};
+    $("tDiscText").textContent = "券商連線中斷，正在自動重新登入；重連前停損停利暫停監控、不送新委託，觸發的出場會在重連後立即送出。" +
+      (r.attempts ? `已嘗試 ${r.attempts} 次` + (r.last_error ? `，最近一次錯誤：${r.last_error}` : "") + "。" : "") +
+      "（凱基清晨常有系統維護，維護結束後就會連上）";
+  }
   $("tCards").innerHTML = [
     ["今日損益（估）", `<b class="${clsPn(s.pnl_today)}">${fmtN(s.pnl_today)}</b>`, `虧損上限 ${fmtN(L.max_daily_loss)}`],
     ["今日已實現", `<b class="${clsPn(d.realized)}">${fmtN(d.realized)}</b>`, "含手續費與稅估算；台北 06:00 換日"],
@@ -1344,6 +1352,7 @@ async function tradeAct(path, ask, body){
 $("tCancelAll").addEventListener("click", () => tradeAct("/api/cancel_all", "確定刪除本程式所有未成交委託與等待中的進場單？"));
 $("tFlatAll").addEventListener("click", () => tradeAct("/api/flatten_all", "確定把本程式監控中的部位全部平倉，並停止今日新委託？"));
 $("tResume").addEventListener("click", () => tradeAct("/api/resume", "確定恢復今日新委託？"));
+$("tReconnect").addEventListener("click", () => tradeAct("/api/reconnect"));
 $("paneTrade").addEventListener("click", e => {
   const c = e.target.closest("[data-cancel]"); if (c) tradeAct("/api/cancel", `取消委託 ${c.dataset.cancel}？`, {id:c.dataset.cancel});
   const d = e.target.closest("[data-detach]"); if (d) tradeAct("/api/detach", `停止監控 ${d.dataset.detach}？（不會賣出，只是不再自動出場）`, {id:d.dataset.detach});

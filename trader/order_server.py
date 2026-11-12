@@ -430,6 +430,12 @@ def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, 
                 return self._json(200, engine.cancel_all())
             if path == "/api/flatten_all":
                 return self._json(200, engine.flatten_all())
+            if path == "/api/reconnect":
+                if not hasattr(engine.broker, "reconnect_now"):
+                    return self._json(200, {"ok": False, "error": "不支援"})
+                engine.broker.reconnect_now()
+                engine.log("reconnect", "使用者按下「立即重新連線」")
+                return self._json(200, {"ok": True})
             if path == "/api/resume":
                 return self._json(200, engine.resume())
             if path == "/api/cancel":

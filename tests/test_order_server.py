@@ -1039,6 +1039,43 @@ def test_us_reject_reason_is_looked_up():
     assert o["status"] == "rejected" and "外幣交割帳戶未開立" in o["msg"] and "E123" in o["msg"]
 
 
+def test_reconnect_failures_are_visible_and_retry_now():
+    import time
+    e, api, _ = setup()
+    br = e.broker
+    br.RECONNECT_WAITS = (30,)              # 正常要等 30 秒才重試
+    calls = {"n": 0}
+    real_login = api.login
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("系統維護中")
+        return real_login()
+    api.login = flaky
+    br.reconnect_now()                       # 第一次立即嘗試（失敗）
+    for _ in range(50):
+        if br.reconnect_info.get("last_error"):
+            break
+        time.sleep(0.02)
+    snap = e.snapshot()
+    assert snap["reconnect"]["attempts"] == 1 and "系統維護中" in snap["reconnect"]["last_error"]
+    assert any("系統維護中" in l["msg"] for l in snap["log"])      # 操作紀錄看得到
+    br.reconnect_now()                       # 使用者按「立即重新連線」：不用等 30 秒
+    for _ in range(100):
+        if br.reconnect_info.get("state") == "ok":
+            break
+        time.sleep(0.02)
+    assert br.reconnect_info["state"] == "ok" and calls["n"] == 2 and e.connected
+
+
+def test_swing_exit_time_requires_max_days():
+    e, api, _ = setup()
+    r = e.submit_plan({"items": [tw(exit={"position_type": "swing", "exit_time": "13:00"})]})["results"][0]
+    assert not r["ok"] and "最長持有天數" in r["reason"]
+    assert plan(e, tw(exit={"position_type": "swing", "exit_time": "13:00", "max_hold_days": 3}))[0]["ok"]
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

@@ -97,6 +97,8 @@ class KgiBroker:
         self.accounts: list[dict] = []
         self._reconnecting = False
         self._closing = False
+        self._wake = threading.Event()
+        self.reconnect_info: dict = {"state": "ok", "attempts": 0, "last_error": ""}
         self.clock: Callable[[], datetime] = mh.now_tpe    # Engine 建立時會換成它的時鐘     # 最近一次庫存查詢：券商回傳幾列、有哪些欄位（只供診斷）
 
     # ── 連線與帳號 ──
@@ -191,21 +193,41 @@ class KgiBroker:
 
     def _reconnect_loop(self):
         n = 0
+        info = self.reconnect_info
+        info.update(state="reconnecting", attempts=0, last_error="",
+                    since=datetime.now().isoformat(timespec="seconds"))
         try:
             while not self._closing:
-                wait = self.RECONNECT_WAITS[min(n, len(self.RECONNECT_WAITS) - 1)]
-                time.sleep(wait)
+                wait = 0 if self._wake.is_set() else self.RECONNECT_WAITS[min(n, len(self.RECONNECT_WAITS) - 1)]
+                info["next_try_in"] = wait
+                self._wake.wait(wait)                 # 「立即重新連線」會提早喚醒
+                self._wake.clear()
+                if self._closing:
+                    return
                 n += 1
+                info.update(attempts=n, last_try=datetime.now().isoformat(timespec="seconds"))
                 try:
                     if self.relogin():
+                        info.update(state="ok", last_error="", reconnected_at=info["last_try"])
                         self._log("reconnect", f"第 {n} 次重新登入成功，已恢復帳號、回報與 {len(self._subs)} 檔行情訂閱")
-                        self._on_event({"kind": "reconnected", "local_id": None, "msg": "重新登入成功"})
+                        self._on_event({"kind": "reconnected", "local_id": None, "msg": f"第 {n} 次重新登入成功"})
                         return
-                    self._log("error", f"第 {n} 次重新登入失敗，{self.RECONNECT_WAITS[min(n, len(self.RECONNECT_WAITS) - 1)]} 秒後再試")
+                    info["last_error"] = "登入後找不到原本的帳號"
+                    self._log("error", f"第 {n} 次重新登入失敗：登入後找不到原本的帳號")
                 except Exception as e:  # noqa: BLE001  重連失敗不可讓執行緒結束
+                    info["last_error"] = str(e) or type(e).__name__
                     self._log("error", f"第 {n} 次重新登入發生錯誤：{e}")
+                self._on_event({"kind": "reconnect_failed", "local_id": None, "msg": info["last_error"],
+                                "attempt": n})
         finally:
             self._reconnecting = False
+
+    def reconnect_now(self) -> None:
+        """使用者按「立即重新連線」：正在重試就提早喚醒，否則開始重連。"""
+        self._wake.set()
+        if not self._reconnecting and not self._closing:
+            self._reconnecting = True
+            threading.Thread(target=self._reconnect_loop, daemon=True).start()
 
     def relogin(self) -> bool:
         """依官方重登範例呼叫既有物件的 api.login()，再恢復帳號、回報 callback 與行情訂閱。"""
