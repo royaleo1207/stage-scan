@@ -19,6 +19,7 @@ exits:
   max_retries: 5                # 出場重送次數上限，超過會在狀態頁標示「平倉失敗，請手動處理」
 
 enforce_hours_in_simulation: false   # 模擬環境是否也檢查交易時段（凱基模擬環境營業日 08:30～隔日 05:00 可下單）
+tw_off_hours: send                   # 台股非交易時段下單：send（照常送給凱基，可能成為預約單，跟凱基 App 一樣）或 reject（程式直接擋下）
 
 costs:                          # 台股損益估算（買賣各收手續費，賣出收證交稅）
   fee_rate: 0.001425            # 手續費率（法定上限 0.1425%）

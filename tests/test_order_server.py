@@ -263,8 +263,19 @@ def test_prechecks():
     assert not plan(e, tw(action="Sell", category="cash", qty=1))[0]["ok"]   # 已被未成交賣單佔用
 
 
+def test_live_off_hours_sends_like_kgi_app():
+    e, api, clock = setup(now="2026-11-12T15:30:00", live=True)
+    r = plan(e, tw(unit="odd", qty=1, price=100.0))           # 收盤後零股：照常送給凱基（可能成為預約單）
+    assert r[0]["ok"] and "預約單" in r[0]["reason"] and len(api.Order.calls) == 1
+    r = plan(e, tw(qty=1, exit={"position_type": "daytrade"}))  # 當沖不能在收盤後進場
+    assert not r[0]["ok"] and "當沖" in r[0]["reason"]
+    clock.set("2026-11-12T10:00:00")
+    r = plan(e, tw(unit="odd", qty=1, price=100.0))
+    assert r[0]["ok"] and "預約單" not in r[0]["reason"]
+
+
 def test_live_hours_and_mode_mismatch():
-    e, api, clock = setup(now="2026-11-10T07:00:00", live=True)
+    e, api, clock = setup(now="2026-11-10T07:00:00", live=True, cfg={"tw_off_hours": "reject"})
     r = plan(e, tw())
     assert not r[0]["ok"] and "委託時段" in r[0]["reason"]
     clock.set("2026-11-10T13:50:00")
@@ -589,9 +600,15 @@ def test_dry_run_logs_in_live_but_never_sends():
     api.USQuote.push("AAPL", 199.0)
     assert api.Order.calls == [] and api.SubOrder.calls == []     # 從未送到凱基
     assert any(x["symbol"] == "AAPL" and x["status"] == "open" for x in e.d["positions"].values())
-    # 演練也依真實交易時段檢查
+    # 演練也依真實交易時段：盤前送出的委託先收下（如同預約單），開盤後才成交
     clock.set("2026-11-10T07:00:00")
-    assert not plan(e, tw())[0]["ok"]
+    r = plan(e, tw(symbol="1101", qty=1, price=100.0))
+    assert r[0]["ok"] and "預約單" in r[0]["reason"]
+    api.Quote.push("1101", 99.0)
+    assert not any(x["symbol"] == "1101" for x in e.d["positions"].values())
+    clock.set("2026-11-10T09:01:00")
+    api.Quote.push("1101", 99.0)
+    assert any(x["symbol"] == "1101" for x in e.d["positions"].values())
     # 重啟後本機模擬委託失效，不會被誤認為券商委託
     plan(e, us(qty=1, price=100.0))
     e2 = Engine(br, e.store, {}, live=False, clock=clock)

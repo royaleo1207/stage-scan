@@ -78,6 +78,8 @@ def validate_cfg(cfg: dict) -> None:
             errs.append(f"{key} = {v} 超出範圍 {rng}（{hint}）")
     if cfg.get("exits", {}).get("tw_common_price") not in ("limit_updown", "market"):
         errs.append("exits.tw_common_price 只能是 limit_updown 或 market")
+    if cfg.get("tw_off_hours") not in ("send", "reject"):
+        errs.append("tw_off_hours 只能是 send 或 reject")
     if not isinstance(cfg.get("enforce_hours_in_simulation"), bool):
         errs.append("enforce_hours_in_simulation 只能是 true 或 false")
     if not (isinstance(cfg.get("scan_url"), str) and cfg["scan_url"].startswith("https://")):

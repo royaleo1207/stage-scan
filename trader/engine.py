@@ -30,7 +30,8 @@ DEFAULT_CFG = {
         "retry_sec": 20,                     # 出場單多久沒成交就刪單重掛
         "max_retries": 5,
     },
-    "enforce_hours_in_simulation": False,    # 凱基模擬環境營業日 08:30～隔日 05:00 都可下單，預設不檢查時段
+    "enforce_hours_in_simulation": False,
+    "tw_off_hours": "send",                  # 台股非交易時段的委託：send（照常送給凱基，可能成為預約單）或 reject（程式直接擋下）    # 凱基模擬環境營業日 08:30～隔日 05:00 都可下單，預設不檢查時段
     "us_costs": {"fee_rate": 0.0, "min_fee": 0.0, "sec_fee_rate": 0.0},
     "costs": {"fee_rate": 0.001425, "fee_discount": 1.0, "min_fee": 20, "tax_rate": 0.003,
               "tax_day_trade": 0.0015, "slippage_ticks": 1},
@@ -296,8 +297,13 @@ class Engine:
                     return f"{what}庫存 {have} 股，不足這筆 {shares_of(spec)} 股（含其他未成交平倉單）"
             if self._check_hours():
                 ok, why = self._can_order_now(spec)
-                if not ok and not (rules and rules.has_entry_condition() and not for_send):
-                    return why
+                waiting = rules and rules.has_entry_condition() and not for_send
+                if not ok and not waiting:
+                    if daytrade:
+                        return why + "；當沖只能在盤中進場"
+                    if self.cfg.get("tw_off_hours") == "reject":
+                        return why
+                    # 預設：跟凱基 App 一樣照常送出，由凱基決定是否收為預約單
         else:
             if not self.broker.has_us:
                 return "下單程式未設定複委託帳號（KGI_US_ACCOUNT）"
@@ -349,6 +355,9 @@ class Engine:
         if o["status"] == "sending":
             o["status"] = "submitted"
         o["msg"] = msg or "已送出"
+        if spec.market == "TW" and self._check_hours() and o["role"] in ("entry", "close") and \
+                not self._can_order_now(spec)[0]:
+            o["msg"] += "（非交易時段送出，凱基可能收為預約單或退回，請以委託回報為準）"
         if o["role"] == "entry":
             day = self.day()
             day["amount"] += self.risk.to_twd(o["market"], o["est"])
