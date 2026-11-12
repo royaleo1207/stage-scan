@@ -17,7 +17,7 @@ env:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022      # 指定版本：windows-latest 偶爾排不到機器
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
