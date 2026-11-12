@@ -748,6 +748,18 @@ def test_rod_expires_after_close_and_pnl_rolls_over():
     assert mh.session_close_after("TW", "odd_after", T("2026-11-13T14:00:00")).isoformat().startswith("2026-11-13T14:30")
 
 
+def test_cancelled_orders_release_daily_amount():
+    e, api, _ = setup(cfg={"risk": {"max_daily_amount": 250_000}})
+    plan(e, tw(qty=2, price=100.0))                      # 20 萬
+    assert not plan(e, tw(qty=1, price=100.0))[0]["ok"]   # 再 10 萬超過 25 萬
+    c = api.Order.calls[-1]
+    api.Order.emit(Task.Deal, c["order_id"], qty=1, price=100.0)       # 成交 1 張
+    e.cancel_order(list(e.d["orders"])[0])
+    api.Order.emit(Task.CancelOrder, c["order_id"], status=Status.Success)
+    assert e.day()["amount"] == 100_000                   # 未成交的 1 張退回額度
+    assert plan(e, tw(qty=1, price=100.0))[0]["ok"]
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

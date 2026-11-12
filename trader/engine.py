@@ -350,6 +350,7 @@ class Engine:
             day = self.day()
             day["amount"] += self.risk.to_twd(o["market"], o["est"])
             day["orders"] += 1
+            o["counted_day"] = self.risk_day()
         self.log("order", f"{o['id']} 送出 {spec.market} {spec.symbol} {spec.action} {CATEGORY_LABEL[spec.category]} "
                           f"{spec.qty} {spec.unit} {spec.price_type} {spec.price or ''} {spec.tif}",
                  order=o["id"], spec=o["spec"], role=o["role"])
@@ -403,14 +404,14 @@ class Engine:
                 o["msg"] = "委託成功"
             elif k == "reject":
                 o["status"], o["msg"] = "rejected", ev.get("msg") or "委託失敗"
-                if o["role"] == "entry":
-                    self.day()["amount"] -= self.risk.to_twd(o["market"], o["est"])
+                self._refund_unfilled(o)
                 if o["role"] == "exit":
                     self._exit_failed(o)
             elif k == "deal":
                 self._on_deal(o, int(ev.get("qty") or 0), float(ev.get("price") or 0), ev)
             elif k == "cancelled":
                 o["status"] = "cancelled" if o["filled"] == 0 else "partial_cancelled"
+                self._refund_unfilled(o)
                 o["msg"] = o.get("cancel_reason") or "已取消"
                 if o["role"] == "exit":
                     self._exit_failed(o, resend=True)
@@ -583,6 +584,17 @@ class Engine:
             if changed:
                 self.store.save()
 
+    def _refund_unfilled(self, o: dict) -> None:
+        """取消、失效、被拒的進場單：未成交部分不佔用單日金額上限。"""
+        if o["role"] != "entry" or not o.get("counted_day") or o.get("refunded"):
+            return
+        day = self.d["days"].get(o["counted_day"])
+        if day is None:
+            return
+        left = max(0, o["spec"]["qty"] - o["filled"]) / max(1, o["spec"]["qty"])
+        day["amount"] = max(0.0, day["amount"] - self.risk.to_twd(o["market"], o["est"] * left))
+        o["refunded"] = True
+
     def _expire_rod(self, now: datetime) -> bool:
         """ROD 委託在送出後的第一個交易時段收盤就失效。
         本機模擬（演練、美股模擬）自己刪單；券商委託則向券商查詢最新狀態。"""
@@ -607,6 +619,7 @@ class Engine:
                 st = (info or {}).get("status", "")
                 if o["status"] in ("submitted", "partial") and st not in ("Filled",):
                     o["status"] = "expired" if o["filled"] == 0 else "partial_cancelled"
+                    self._refund_unfilled(o)
                     o["msg"] = f"ROD 委託已過收盤（券商狀態：{st or '查無'}），視為失效；如有疑問請到券商軟體確認"
                     self.log("expire", f"{o['id']} {o['spec']['symbol']} {o['msg']}", order=o["id"])
         return changed
