@@ -958,6 +958,19 @@ def test_installer_files_consistent():
     assert "kgisuperpy==2.1.2" in (ROOT / "installer" / "requirements.txt").read_text(encoding="utf-8")
 
 
+def test_armed_entry_expires_at_session_close():
+    e, api, clock = setup(now="2026-11-12T15:26:00", live=True)      # 收盤後建立，只設突破價
+    r = plan(e, tw(symbol="2330", qty=1, price=105.0, exit={"breakout_price": 104}))
+    assert r[0]["ok"] and list(e.d["orders"].values())[0]["status"] == "armed"
+    clock.set("2026-11-13T09:05:00")                                  # 隔天盤中仍可觸發
+    e.on_timer()
+    assert list(e.d["orders"].values())[0]["status"] == "armed"
+    clock.set("2026-11-13T13:30:01")                                  # 隔天收盤後過期，不會再隔天送出
+    e.on_timer()
+    o = list(e.d["orders"].values())[0]
+    assert o["status"] == "expired" and api.Order.calls == []
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

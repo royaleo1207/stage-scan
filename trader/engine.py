@@ -149,7 +149,10 @@ class Engine:
         self.d["orders"][oid] = o
         if rules and rules.has_entry_condition():
             self.broker.subscribe(spec.market, spec.symbol, spec.unit == "odd")
-            o["msg"] = "等待進場條件（時間窗／突破價）"
+            close = mh.session_close_after(spec.market, spec.unit, self.now(), self.holidays)
+            when = close.astimezone(mh.TPE)
+            o["msg"] = (f"等待進場條件（時間窗／突破價），條件成立才送到凱基；"
+                        f"{when:%m/%d %H:%M}（台北）前未成立就自動過期")
             self.log("armed", f"{oid} {spec.symbol} 等待進場條件", order=oid)
             return {"ok": True, "local_id": oid, "reason": o["msg"]}
         return self._send(o)
@@ -551,6 +554,15 @@ class Engine:
                 if o["status"] not in ACTIVE or not o.get("rules") or o["role"] != "entry":
                     continue
                 rules = xr.ExitRules.from_dict(o["rules"])
+                if o["status"] == "armed":
+                    # 等待條件的委託只等一個交易時段（收盤後建立的等到下一個交易日收盤），不會隔好幾天才突然送出
+                    close = mh.session_close_after(o["market"], o["spec"]["unit"],
+                                                   datetime.fromisoformat(o["created"]), self.holidays)
+                    if now >= close:
+                        o["status"], o["msg"] = "expired", "進場條件在收盤前未成立，已過期"
+                        self.log("expire", f"{o['id']} {o['spec']['symbol']} {o['msg']}", order=o["id"])
+                        changed = True
+                        continue
                 if rules.entry_start and xr.entry_window_state(rules, o["market"], now) == "closed":
                     if o["status"] == "armed":
                         o["status"], o["msg"] = "expired", "進場時間窗已過，未觸發"
