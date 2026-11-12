@@ -73,6 +73,22 @@ def can_match(market: str, unit: str, now: datetime, holidays: set[date] | None 
     return lo <= t.time() <= hi
 
 
+def session_close_after(market: str, unit: str, t: datetime, holidays: set[date] | None = None) -> datetime:
+    """t 之後（或正在進行中）的第一個交易時段的收盤時間：ROD 委託在這個時間失效。"""
+    tz = NY if market == "US" else TPE
+    d = t.astimezone(tz).date()
+    for _ in range(15):
+        if _is_weekday(d, holidays):
+            if market == "US":
+                close = us_session(d)[1]
+            else:
+                close = datetime.combine(d, TW_MATCH_WINDOW.get(unit, TW_MATCH_WINDOW["common"])[1], TPE)
+            if t <= close:
+                return close
+        d += timedelta(days=1)
+    return t
+
+
 def us_session(day: date) -> tuple[datetime, datetime]:
     """某個美東日期的開盤、收盤時間（帶時區）。"""
     return datetime.combine(day, US_OPEN, NY), datetime.combine(day, US_CLOSE, NY)

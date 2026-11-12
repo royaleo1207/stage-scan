@@ -509,8 +509,9 @@ class Engine:
             for p in list(self.d["positions"].values()):
                 if p["status"] != "open" or p["market"] != market or p["symbol"] != symbol or (p["unit"] == "odd") != odd:
                     continue
+                # 今天的比較基準：換日前最後一筆價格（沒有的話用這筆），跳空也算進今天
+                p["day_ref"].setdefault(self.risk_day(), p.get("last") or price)
                 p["last"] = price
-                p["day_ref"].setdefault(self.risk_day(), price)
                 if not p.get("rules"):
                     continue
                 rules = xr.ExitRules.from_dict(p["rules"])
@@ -544,7 +545,7 @@ class Engine:
     def on_timer(self) -> None:
         with self.lock:
             now = self.now()
-            changed = False
+            changed = self._expire_rod(now)
             for o in list(self.d["orders"].values()):
                 if o["status"] not in ACTIVE or not o.get("rules") or o["role"] != "entry":
                     continue
@@ -581,6 +582,34 @@ class Engine:
             changed |= self._check_daily_loss()
             if changed:
                 self.store.save()
+
+    def _expire_rod(self, now: datetime) -> bool:
+        """ROD 委託在送出後的第一個交易時段收盤就失效。
+        本機模擬（演練、美股模擬）自己刪單；券商委託則向券商查詢最新狀態。"""
+        changed = False
+        for o in list(self.d["orders"].values()):
+            if o["status"] not in ("submitted", "partial") or not o.get("sent_at"):
+                continue
+            close = mh.session_close_after(o["market"], o["spec"]["unit"], datetime.fromisoformat(o["sent_at"]),
+                                           self.holidays)
+            if now < close or o.get("expiry_checked"):
+                continue
+            o["expiry_checked"] = True
+            changed = True
+            if str(o.get("order_id") or "").startswith("SIM"):
+                o["cancel_reason"] = "ROD 委託收盤未成交，已失效"
+                self.broker.cancel(o["id"])
+                self.log("expire", f"{o['id']} {o['spec']['symbol']} ROD 收盤未成交，已失效", order=o["id"])
+            else:
+                info = self.broker.reattach(o["id"], o["market"], o.get("order_id") or o.get("org_seqnum"))
+                if info and info["filled"] > o["filled"]:
+                    self._on_deal(o, info["filled"] - o["filled"], info["avg"] or 0, {})
+                st = (info or {}).get("status", "")
+                if o["status"] in ("submitted", "partial") and st not in ("Filled",):
+                    o["status"] = "expired" if o["filled"] == 0 else "partial_cancelled"
+                    o["msg"] = f"ROD 委託已過收盤（券商狀態：{st or '查無'}），視為失效；如有疑問請到券商軟體確認"
+                    self.log("expire", f"{o['id']} {o['spec']['symbol']} {o['msg']}", order=o["id"])
+        return changed
 
     # ── 出場 ──
     def _exit_spec(self, p: dict) -> list[OrderSpec]:
@@ -691,7 +720,7 @@ class Engine:
             if p["source"] != "inventory" and p["entry_date"] == rd:
                 ref = p["avg"]                       # 今天建立的部位：從成本算起
             else:
-                ref = p["day_ref"].get(rd, p["avg"])  # 舊部位：從今天第一筆報價算起
+                ref = p["day_ref"].get(rd, p["last"])  # 舊部位：從換日前最後一筆價格算起
             sign = 1 if p["side"] == "long" else -1
             tot += self.risk.to_twd(p["market"], (p["last"] - ref) * p["shares"] * sign)
         return tot

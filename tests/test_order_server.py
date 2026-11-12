@@ -718,6 +718,36 @@ def test_scan_feed_downloads_and_keeps_last_good_copy():
     assert g.info()["generated_at"] == f.info()["generated_at"]
 
 
+def test_rod_expires_after_close_and_pnl_rolls_over():
+    kgi = FakeKgi()
+    br = KgiBroker(kgi_module=kgi, simulation=False, dry_run=True)
+    br.login("A1", "pw", "9801234", "9805678")
+    clock = Clock("2026-11-11T21:39:00")                # 美東 08:39 盤前送出
+    e = Engine(br, Store(tempfile.mkdtemp()), {}, live=False, clock=clock)
+    api = kgi.api
+    plan(e, us(qty=1, price=169.36), us(symbol="FDS", qty=1, price=330.0))
+    clock.set("2026-11-11T23:00:00")
+    api.USQuote.push("AAPL", 175.0)                     # 限價低於市價，不成交
+    api.USQuote.push("FDS", 325.98)
+    api.USQuote.push("FDS", 334.88)
+    clock.set("2026-11-12T04:59:00")
+    e.on_timer()
+    assert list(e.d["orders"].values())[0]["status"] == "submitted"
+    assert round(e.pnl_today()) == round((334.88 - 325.98) * 32)
+    clock.set("2026-11-12T05:00:01")                    # 美東 16:00 收盤後
+    e.on_timer()
+    o = list(e.d["orders"].values())[0]
+    assert o["status"] == "cancelled" and "ROD" in o["msg"]
+    clock.set("2026-11-12T10:00:00")                    # 換日後還沒有新報價：今日損益為 0，不把昨天的漲幅算進今天
+    assert round(e.pnl_today()) == 0
+    clock.set("2026-11-12T22:31:00")
+    api.USQuote.push("FDS", 336.88)                     # 今天漲 2 美元
+    assert round(e.pnl_today()) == round(2 * 32)
+    T = lambda x: datetime.fromisoformat(x).replace(tzinfo=mh.TPE)  # noqa: E731
+    assert mh.session_close_after("TW", "common", T("2026-11-13T15:00:00")).isoformat().startswith("2026-11-16T13:30")
+    assert mh.session_close_after("TW", "odd_after", T("2026-11-13T14:00:00")).isoformat().startswith("2026-11-13T14:30")
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re
