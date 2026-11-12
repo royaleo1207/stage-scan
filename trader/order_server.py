@@ -29,12 +29,13 @@ import yaml
 from . import engine as eng
 from . import kgi_spec
 from .envfile import load_env
+from .paths import DATA
 from .store import RUNTIME, Store
 
 HOST, PORT = "127.0.0.1", 8765
 HERE = Path(__file__).resolve().parent
 CFG_DEFAULTS = HERE / "order_defaults.yaml"
-CFG_USER = HERE / "order_config.yaml"
+CFG_USER = DATA / "order_config.yaml"     # 你的設定（安裝版在 %LOCALAPPDATA%\\StageScanTrader）
 STATUS_PAGE = HERE / "status_page.html"
 APP_PAGE = HERE.parent / "index.html"          # 與 GitHub Pages 同一份網頁；由本機提供時自動帶入權杖
 TOKEN_META = '<meta name="trader-token" content="">'
@@ -134,7 +135,8 @@ def app_page(pair_code: str) -> bytes:
     return html.replace(TOKEN_META, f'<meta name="trader-token" content="{pair_code}">', 1).encode("utf-8")
 
 
-def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, on_quit=None, on_show=None):
+def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, on_quit=None, on_show=None,
+                 updates=None):
     """target：App（主畫面登入流程）或已登入的 Engine（指令列模式、測試）。"""
     from .app_session import StaticApp
     app = target if hasattr(target, "session") else StaticApp(target)
@@ -283,6 +285,9 @@ def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, 
                 return
             if path == "/api/session":
                 return self._json(200, app.session())
+            if path == "/api/version":
+                from .version import __version__
+                return self._json(200, updates.info() if updates else {"current": __version__, "newer": False})
             if path == "/api/scan_info":
                 return self._json(200, scan.info() if scan else {"available": False})
             engine = self._engine()
@@ -414,11 +419,14 @@ class Services:
         self.app = app
         self.pair = os.environ.get("PAIR_CODE") or f"{secrets.randbelow(10**6):06d}"
         self.scan = ScanFeed(self.runtime, url=self.cfg["scan_url"], log=self.log)
+        from .updates import UpdateChecker
+        self.updates = UpdateChecker()
         self.quit_hooks: list = []
         self.show_hook = None          # 桌面版設定：把視窗叫到最前面，成功回傳 True
         self.srv = ThreadingHTTPServer((HOST, port), make_handler(app, self.pair, self.cfg.get("allowed_origins", []),
                                                                   self.scan, on_quit=self.request_quit,
-                                                                  on_show=lambda: bool(self.show_hook and self.show_hook())))
+                                                                  on_show=lambda: bool(self.show_hook and self.show_hook()),
+                                                                  updates=self.updates))
         self.port = self.srv.server_address[1]
         self.url = f"http://{HOST}:{self.port}/"
         self.stop = threading.Event()
@@ -427,6 +435,7 @@ class Services:
     def start_background(self, serve: bool = True) -> None:
         threading.Thread(target=run_app_timer, args=(self.app, self.stop), daemon=True).start()
         threading.Thread(target=self.scan.run, args=(self.stop,), daemon=True).start()
+        threading.Thread(target=self.updates.run, args=(self.stop,), daemon=True).start()
         if serve:
             threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.app.auto_login()

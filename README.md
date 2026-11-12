@@ -11,6 +11,23 @@
 
 ## 自由下單（凱基 SuperPy：台股＋美股複委託）
 
+> **一般使用者請直接下載安裝程式**：[StageScanTrader-Setup.exe](https://github.com/royaleo1207/stage-scan/releases/latest/download/StageScanTrader-Setup.exe)
+> （不需要安裝 Python。出現「Windows 已保護您的電腦」時按「其他資訊」→「仍要執行」。安裝後從桌面開啟「階段掃描下單」。）
+> 安裝版的設定與紀錄存在 `%LOCALAPPDATA%\StageScanTrader`（`order_config.yaml`、`runtime\console.log` 等），更新或重新安裝都會保留。
+> 以下是從原始碼執行與開發的說明。
+
+### 發布新版安裝程式（開發者）
+
+推送版本標籤即自動打包並發布到 Releases（`.github/workflows/build-installer.yml`）：
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+打包流程：下載官方內嵌版 Python 3.12 → 安裝 `installer/requirements.txt` 的套件 → 執行測試 → Inno Setup 產生安裝程式。已安裝的程式會在畫面上提示新版本。
+
+
 在網頁勾選標的、自由設定委託單與出場規則，送到你 Windows 電腦上的「本機下單程式」，由它透過凱基 SuperPy（`kgisuperpy` 2.1.2）下單、監控停損停利並自動平倉。
 
 ```

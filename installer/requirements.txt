@@ -1,0 +1,7 @@
+# 安裝程式內附的套件（GitHub Actions 打包時安裝到內嵌 Python）
+kgisuperpy==2.1.2
+pywebview==6.2.1
+pandas
+numpy
+pyyaml
+tzdata

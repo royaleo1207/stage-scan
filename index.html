@@ -274,6 +274,15 @@ body.need-login #loader, body.need-login #app, body.need-login #topActs{display:
 .linkbtn{border:0;background:none;color:var(--focus);cursor:pointer;padding:0;font-size:13px;text-decoration:underline}
 .userbar{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:13px;color:var(--muted)}
 .userbar b{color:var(--ink);font-weight:500}
+/* GitHub 網頁版：下載桌面程式 */
+body.web .tabs, body.web .pick, body.web #orderBar{display:none!important}
+.dlbox{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;margin:0 0 16px;padding:14px 16px;border-radius:10px;border:1px solid var(--s2);background:var(--s2t);font-size:14px}
+.dlbox b{margin-right:6px}
+.dlacts{display:flex;gap:8px;flex-wrap:wrap}
+.dlbox a.btn{text-decoration:none;display:inline-block;color:var(--ink)}
+.dlbox a.btn.primary{color:var(--bg)}
+.newscan small{color:var(--muted)}
+.lgnote a{color:var(--focus)}
 </style>
 </head>
 <body>
@@ -312,6 +321,7 @@ body.need-login #loader, body.need-login #app, body.need-login #topActs{display:
         <p class="err" id="acErr" role="alert"></p>
       </form>
       <p class="lgnote"><button type="button" class="linkbtn" data-quit>結束程式</button></p>
+      <p class="lgnote">還沒開通？<a href="https://h5webtrade.kgieworld.com.tw/ServicesWeb/Auth/Login?orign=o&amp;applytype=21" target="_blank" rel="noopener">線上申請凱基 API</a>（簽署風險預告書暨使用同意書），並依<a href="https://superpy.kgieworld.com.tw/kgipythonapi/guide/tw/member" target="_blank" rel="noopener">凱基 SuperPy 說明</a>安裝 CA 憑證。美股需另向營業員申請複委託 API。<span id="appVer"></span></p>
       <p class="lgnote">帳號密碼只在你的電腦上使用，不會上傳。勾選「記住密碼」時，密碼存在 Windows「認證管理員」。第一次使用前，請先依凱基說明安裝 CA 憑證並簽署 API 同意書。</p>
     </div>
   </section>
@@ -335,6 +345,11 @@ body.need-login #loader, body.need-login #app, body.need-login #topActs{display:
   </section>
 
   <main id="app" class="hidden">
+    <div class="dlbox hidden" id="webDl">
+      <div><b>想直接從選股下單？</b>下載「階段掃描下單」Windows 桌面程式：勾選標的、設定停損停利與當沖平倉，透過凱基 SuperPy 即時下單，並查詢庫存、委託與成交。需要凱基證券帳戶並開通 API。</div>
+      <span class="dlacts"><a class="btn primary" href="https://github.com/royaleo1207/stage-scan/releases/latest/download/StageScanTrader-Setup.exe">下載安裝程式</a><a class="btn" href="https://github.com/royaleo1207/stage-scan/releases/latest" target="_blank" rel="noopener">安裝說明</a></span>
+    </div>
+    <div class="newscan hidden" id="newVer" role="status"></div>
     <div class="newscan hidden" id="newScan" role="status"></div>
     <nav class="tabs" role="tablist" aria-label="功能">
       <button type="button" role="tab" id="tabScan" aria-controls="paneScan" aria-selected="true">掃描結果</button>
@@ -1371,7 +1386,24 @@ document.addEventListener("click", async e => {
   ord.conn = null; watchTrade(false); showTab("paneScan"); refreshSession();
 });
 
+async function checkVersion(){
+  try{
+    const v = await tfetch("/api/version");
+    $("appVer").textContent = v.current && v.current !== "dev" ? `　目前版本 ${v.current}` : "";
+    if (v.newer){
+      $("newVer").innerHTML = `<span>有新版本 ${esc(v.latest)}（目前 ${esc(v.current)}）</span><a class="btn" href="${esc(v.download)}" target="_blank" rel="noopener">下載安裝程式</a><a href="${esc(v.page)}" target="_blank" rel="noopener">更新內容</a><small>下載後關閉本程式再執行安裝，設定與紀錄會保留。</small>`;
+      $("newVer").classList.remove("hidden");
+    }
+  }catch(e){}
+}
+if (!APP){
+  // GitHub 網頁：只提供選股；下單引導到桌面程式
+  document.body.classList.add("web");
+  $("webDl").classList.remove("hidden");
+}
 if (APP){
+  setTimeout(checkVersion, 4000);
+  setInterval(checkVersion, 6 * 3600 * 1000);
   document.body.classList.add("app", "need-login");
   $("pairWrap").classList.add("hidden"); $("btnConn").classList.add("hidden");
   refreshSession();

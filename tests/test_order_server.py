@@ -923,6 +923,41 @@ def test_desktop_redirects_console_output():
     assert (ROOT / "StageScanTrader.pyw").exists()
 
 
+def test_update_checker_and_data_folder():
+    from trader.updates import UpdateChecker, parse
+    assert parse("v1.2.3") == (1, 2, 3) and parse("dev") is None
+    u = UpdateChecker("1.0.0", fetch=lambda: "v1.0.1")
+    u.check()
+    assert u.info()["newer"] and u.info()["download"].endswith("StageScanTrader-Setup.exe")
+    u = UpdateChecker("1.0.1", fetch=lambda: "v1.0.1")
+    u.check()
+    assert not u.info()["newer"]
+    u = UpdateChecker("1.0.0", fetch=lambda: (_ for _ in ()).throw(OSError("offline")))
+    u.check()
+    assert not u.info()["newer"] and "offline" in u.error
+    import os
+    from trader import paths
+    old = os.environ.get("STAGE_SCAN_DATA")
+    try:
+        os.environ["STAGE_SCAN_DATA"] = "/tmp/x"
+        assert str(paths.data_dir()) == "/tmp/x"
+        del os.environ["STAGE_SCAN_DATA"]
+        assert paths.data_dir() == paths.TRADER_DIR             # 原始碼執行：資料在 trader/
+    finally:
+        if old is not None:
+            os.environ["STAGE_SCAN_DATA"] = old
+
+
+def test_installer_files_consistent():
+    iss = (ROOT / "installer" / "StageScanTrader.iss").read_text(encoding="utf-8-sig")
+    wf = (ROOT / ".github" / "workflows" / "build-installer.yml").read_text(encoding="utf-8")
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
+    from trader.updates import DOWNLOAD
+    assert "OutputBaseFilename=StageScanTrader-Setup" in iss and "PrivilegesRequired=lowest" in iss
+    assert "dist/StageScanTrader-Setup.exe" in wf and DOWNLOAD in html
+    assert "kgisuperpy==2.1.2" in (ROOT / "installer" / "requirements.txt").read_text(encoding="utf-8")
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

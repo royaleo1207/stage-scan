@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .market_hours import TPE
 
-RUNTIME = Path(__file__).resolve().parent / "runtime"
+from .paths import RUNTIME  # noqa: E402  安裝版放在 %LOCALAPPDATA%\\StageScanTrader
 
 EMPTY = {"version": 1, "orders": {}, "fills": [], "positions": {}, "days": {}, "seq": 0}
 

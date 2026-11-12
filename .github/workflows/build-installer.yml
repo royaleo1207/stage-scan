@@ -1,0 +1,135 @@
+name: 打包安裝程式
+
+# 推送版本標籤（例如 v1.0.0）時，在 Windows 環境打包 StageScanTrader-Setup.exe 並發布到 Releases。
+# 也可以在 Actions 頁面手動執行（只產生檔案供下載測試，不發布）。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  PY_VERSION: "3.12.10"     # 內嵌 Python 版本（需與 setup-python 相同，套件才相容）
+  PYTHONUTF8: "1"           # 讓 Windows 上的 Python 以 UTF-8 輸出中文
+  PYTHONIOENCODING: "utf-8"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+
+      - name: 決定版本號
+        shell: pwsh
+        run: |
+          $v = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.0.0' }
+          "VERSION=$v" >> $env:GITHUB_ENV
+          Write-Host "版本 $v"
+
+      - name: 下載內嵌版 Python
+        shell: pwsh
+        run: |
+          $dst = "build/StageScanTrader/python"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Invoke-WebRequest "https://www.python.org/ftp/python/$env:PY_VERSION/python-$env:PY_VERSION-embed-amd64.zip" -OutFile py.zip
+          Expand-Archive py.zip -DestinationPath $dst
+          $pth = Get-ChildItem $dst -Filter "python*._pth" | Select-Object -First 1
+          $zip = (Get-ChildItem $dst -Filter "python3*.zip" | Select-Object -First 1).Name
+          # 啟用 site-packages
+          Set-Content -Encoding ascii $pth.FullName "$zip`r`n.`r`nLib\site-packages`r`nimport site"
+          Get-Content $pth.FullName
+
+      - name: 安裝套件到內嵌 Python
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-warn-script-location --target build/StageScanTrader/python/Lib/site-packages -r installer/requirements.txt
+          python -m pip list --path build/StageScanTrader/python/Lib/site-packages | Tee-Object build/packages.txt
+
+      - name: 附上 Visual C++ 執行階段
+        shell: pwsh
+        run: |
+          # 凱基 SuperPy 的 DLL 可能需要；放在 python.exe 旁邊，沒裝 VC++ 可轉散發套件的電腦也能執行
+          foreach ($f in "msvcp140.dll","msvcp140_1.dll","msvcp140_2.dll","vcruntime140.dll","vcruntime140_1.dll","concrt140.dll") {
+            $src = "$env:WINDIR\System32\$f"; $dst = "build/StageScanTrader/python/$f"
+            if ((Test-Path $src) -and -not (Test-Path $dst)) { Copy-Item $src $dst; Write-Host "附上 $f" }
+          }
+
+      - name: 複製程式
+        shell: pwsh
+        run: |
+          $app = "build/StageScanTrader/app"
+          New-Item -ItemType Directory -Force "$app/installer" | Out-Null
+          Copy-Item trader $app -Recurse
+          foreach ($x in "runtime","__pycache__",".env","config.yaml","order_config.yaml") {
+            Get-ChildItem "$app/trader" -Recurse -Force -Filter $x | Remove-Item -Recurse -Force
+          }
+          Copy-Item index.html, StageScanTrader.pyw, README.md $app
+          Copy-Item installer/icon.ico "$app/installer/"
+          Set-Content -Encoding ascii "$app/INSTALLED" "installed"
+          Set-Content -Encoding utf8 "$app/trader/version.py" "__version__ = `"$env:VERSION`""
+          Copy-Item build/packages.txt "$app/installer/packages.txt"
+
+      - name: 測試（用內嵌 Python 執行）
+        shell: pwsh
+        run: |
+          $py = "build/StageScanTrader/python/python.exe"
+          & $py -c "import sys; sys.path.insert(0, 'build/StageScanTrader/app'); import webview, yaml, pandas, tzdata, trader.order_server, trader.desktop, trader.version; print('app imports ok', trader.version.__version__)"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $py -c "import kgisuperpy; print('kgisuperpy', kgisuperpy.__file__)"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $py tests/test_order_server.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: 繁體中文安裝畫面
+        shell: pwsh
+        run: |
+          try {
+            Invoke-WebRequest "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseTraditional.isl" -OutFile installer/ChineseTraditional.isl
+          } catch {
+            Write-Host "下載繁體中文語系失敗，改用英文安裝畫面"
+            (Get-Content installer/StageScanTrader.iss) -replace 'MessagesFile: "ChineseTraditional.isl"', 'MessagesFile: "compiler:Default.isl"' -replace '^cht\.', '' | Set-Content -Encoding utf8 installer/StageScanTrader.iss
+          }
+
+      - name: 打包安裝程式
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc "/DAppVersion=$env:VERSION" installer/StageScanTrader.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Item dist/StageScanTrader-Setup.exe | Format-List Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StageScanTrader-Setup
+          path: dist/StageScanTrader-Setup.exe
+
+      - name: 發布到 Releases
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/StageScanTrader-Setup.exe
+          body: |
+            ## 安裝方式
+            1. 下載下方的 **StageScanTrader-Setup.exe** 並雙擊安裝（不需要系統管理員權限）。
+            2. 如果出現藍色的「Windows 已保護您的電腦」：按「**其他資訊**」→「**仍要執行**」（程式尚未購買程式碼簽章，所以 Windows 會提醒）。
+            3. 安裝完成後，從桌面或開始功能表開啟「**階段掃描下單**」，登入凱基即可使用。
+
+            ## 使用前需要
+            - 凱基證券帳戶，並線上簽署「證券 API 服務風險預告書暨使用同意書」
+            - 依凱基說明安裝 CA 憑證；美股另需向營業員申請複委託 API
+            - Windows 10 或 11（64 位元）
+
+            ## 說明
+            - 建議先用「演練」模式（正式登入、本機模擬成交、不送單）熟悉操作。
+            - 設定與紀錄存在 `%LOCALAPPDATA%\StageScanTrader`，更新或重新安裝都會保留。
+            - 更新：下載新版安裝程式，關閉本程式後直接安裝即可。
+            - 本程式只執行你設定的規則，不保證獲利；正式下單前請詳閱 README 的檢查清單。

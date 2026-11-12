@@ -106,16 +106,18 @@ def open_window(url: str, svc=None, storage: Path | None = None) -> bool:
 
 
 def main() -> int:
-    os.chdir(ROOT)
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
+    from trader.paths import RUNTIME
+    RUNTIME.mkdir(parents=True, exist_ok=True)
+    os.chdir(RUNTIME)       # 凱基 SuperPy 會把 TradeCom 紀錄檔寫在目前資料夾：放到資料夾 runtime，不弄髒程式資料夾
     from trader.order_server import PORT, Services, existing_instance, show_existing
-    from trader.store import RUNTIME
 
     console = None
     if sys.stdout is None or "pythonw" in os.path.basename(sys.executable).lower():
         console = redirect_output(RUNTIME)
-    print(f"===== 啟動 {TITLE} =====")
+    from trader.version import __version__
+    print(f"===== 啟動 {TITLE} {__version__}，資料夾 {RUNTIME.parent} =====")
 
     if existing_instance(PORT):
         # 已經在執行：把原本的視窗叫到最前面，不另開視窗（避免關掉後程式還在背景執行卻看不到）

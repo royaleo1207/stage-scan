@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ENV_PATH = Path(__file__).resolve().parent / ".env"
+from .paths import DATA  # noqa: E402
+
+ENV_PATH = DATA / ".env"
 
 
 def load_env(path: Path | None = None, override: bool = False) -> dict[str, str]:
