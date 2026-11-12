@@ -794,7 +794,7 @@ function newItem(s){
   const tg = target(s);
   return {id:uid(), kind:"order", src:s.ticker, market:tg.market, symbol:tg.symbol, name:s.name || "", ref:s.close ?? null,
     action:"Buy", category:"cash", unit:tg.market === "TW" ? "common" : "shares", price_type:"LMT", tif:"ROD",
-    qty:1, price:s.close != null ? +(+s.close).toFixed(tg.market === "TW" ? 2 : 2) : "", currency:"MUT",
+    qty:1, price:s.close != null ? +(+s.close).toFixed(tg.market === "TW" ? 2 : 2) : "", currency:lsGet("usCurrency") || "MUT",
     exitOn:false, ex:exDefault(), result:null};
 }
 function save(){ lsSet("orderItems", JSON.stringify(ord.items.map(i => ({...i, result:null})))); }
@@ -1002,6 +1002,7 @@ $("orderCards").addEventListener("change", e => {
   const card = e.target.closest(".ocard"), it = ord.items.find(x => x.id === card.dataset.id);
   const v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
   setField(it, f, v);
+  if (f === "currency") lsSet("usCurrency", v);          // 記住上次選的交割幣別
   if (f === "unit" && it.market === "TW" && isOddUnit(v) && it.qty < 10) it.qty = 100;
   save(); renderCard(it.id);
 });

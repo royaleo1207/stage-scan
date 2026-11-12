@@ -170,6 +170,9 @@ class _SubAccount:
     def StockPositionReport(self):  # noqa: N802
         return self.rows
 
+    def OrderReport(self):  # noqa: N802
+        return getattr(self, "orders", [])
+
 
 def _check_cb(func):
     """與 kgisuperpy 2.1.2 basic_quote.__set_and_check_callback_function__ 相同的檢查。"""

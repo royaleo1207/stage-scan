@@ -423,6 +423,9 @@ class Engine:
             elif k == "reject":
                 o["status"], o["msg"] = "rejected", ev.get("msg") or "委託失敗"
                 self._refund_unfilled(o)
+                if o["market"] == "US" and not ev.get("msg") and hasattr(self.broker, "us_reject_reason"):
+                    # 複委託的失敗回報常常沒有原因：另開執行緒查凱基委託回報（查詢需要幾秒，不能卡住回報）
+                    threading.Thread(target=self._fill_us_reason, args=(o["id"],), daemon=True).start()
                 if o["role"] == "exit":
                     self._exit_failed(o)
             elif k == "deal":
@@ -610,6 +613,18 @@ class Engine:
             changed |= self._check_daily_loss()
             if changed:
                 self.store.save()
+
+    def _fill_us_reason(self, oid: str) -> None:
+        _time.sleep(2)
+        why = self.broker.us_reject_reason(oid)
+        with self.lock:
+            o = self.d["orders"].get(oid)
+            if not o:
+                return
+            hint = "；若帳戶只有台幣交割，請把「交割幣別」改成台幣（TWD）再試"
+            o["msg"] = f"委託失敗：{why}" if why else "委託失敗（凱基未提供原因）" + (hint if o["spec"].get("currency") == "MUT" else "")
+            self.log("reject", f"{oid} {o['spec']['symbol']} {o['msg']}", order=oid)
+            self.store.save()
 
     def _refund_unfilled(self, o: dict) -> None:
         """取消、失效、被拒的進場單：未成交部分不佔用單日金額上限。"""

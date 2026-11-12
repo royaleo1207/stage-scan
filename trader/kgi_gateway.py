@@ -372,6 +372,24 @@ class KgiBroker:
             return False, f"刪單失敗：{e}"
         return True, ""
 
+    def us_reject_reason(self, local_id: str) -> str:
+        """複委託委託失敗但回報沒有原因時，向凱基查詢委託回報（SubAccount.OrderReport）取得退回原因。"""
+        rec = self._trades.get(local_id)
+        if not rec or rec[0] != "US" or self.simulation or self.dry_run:
+            return ""
+        seq = str(getattr(rec[1].order, "org_seqnum", "") or "")
+        try:
+            rows = _rows(self.api.SubAccount.OrderReport())
+        except Exception as e:  # noqa: BLE001
+            return f"（查詢委託回報失敗：{e}）"
+        for r in rows:
+            if seq and seq in (str(r.get("orig_seqnum", "")).strip(), str(r.get("seqnum", "")).strip()):
+                parts = [str(r.get(k) or "").strip() for k in ("order_err_msg", "sales_status")]
+                code = str(r.get("order_err_code") or "").strip()
+                text = "、".join(p for p in parts if p)
+                return f"{text}（代碼 {code}）" if code and code != "0" else text
+        return ""
+
     def broker_ids(self, local_id: str) -> dict:
         rec = self._trades.get(local_id)
         if not rec:

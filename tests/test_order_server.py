@@ -1023,6 +1023,22 @@ def test_settings_page_saves_and_applies_immediately():
         srv.server_close()
 
 
+def test_us_reject_reason_is_looked_up():
+    import time
+    e, api, _ = setup(now="2026-11-12T21:48:00", live=True)
+    plan(e, us(symbol="AAPL", qty=1, price=85.0))
+    seq = api.SubOrder.calls[-1]["org_seqnum"]
+    api.SubAccount.orders = [{"orig_seqnum": seq, "order_err_code": "E123", "order_err_msg": "外幣交割帳戶未開立",
+                              "sales_status": "委託失敗"}]
+    api.SubOrder.emit(Task.NewOrder, seq, status="委託失敗")
+    for _ in range(60):
+        if "外幣交割帳戶未開立" in list(e.d["orders"].values())[-1]["msg"]:
+            break
+        time.sleep(0.1)
+    o = list(e.d["orders"].values())[-1]
+    assert o["status"] == "rejected" and "外幣交割帳戶未開立" in o["msg"] and "E123" in o["msg"]
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re
