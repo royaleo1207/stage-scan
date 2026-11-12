@@ -760,6 +760,121 @@ def test_cancelled_orders_release_daily_amount():
     assert plan(e, tw(qty=1, price=100.0))[0]["ok"]
 
 
+def _app(folder=None, secrets=None):
+    from trader.app_session import App
+    from trader.secret_store import MemorySecretStore
+    kgis = []
+
+    def factory(simulation, dry_run):
+        k = FakeKgi()
+        kgis.append(k)
+        b = KgiBroker(kgi_module=k, simulation=simulation, dry_run=dry_run)
+        b.min_interval = 0
+        return b
+    app = App({}, Path(folder or tempfile.mkdtemp()), secrets or MemorySecretStore(), factory,
+              clock=Clock("2026-11-12T10:00:00"))
+    return app, kgis
+
+
+def _wait(app, *states):
+    import time
+    for _ in range(100):
+        if app.state in states:
+            return
+        time.sleep(0.02)
+    raise AssertionError(app.state)
+
+
+def test_app_login_select_remember_and_autologin():
+    from trader.secret_store import MemorySecretStore
+    folder, sec = tempfile.mkdtemp(), MemorySecretStore()
+    app, kgis = _app(folder, sec)
+    assert app.session()["state"] == "logged_out"
+    assert not app.start_login("123", "pw", False, "dry_run")[0]                 # 身分證格式
+    assert "確認" in app.start_login("A123456789", "pw", False, "live", "")[1]    # 正式需輸入確認
+    ok, _ = app.start_login("a123456789", "pw", True, "dry_run")
+    assert ok
+    _wait(app, "select_account")
+    s = app.session()
+    assert {a["account"] for a in s["accounts"]} == {"9801234", "9805678"} and "pw" not in json.dumps(s)
+    assert kgis[-1].login_args == ("A123456789", False)                           # 演練：正式環境登入
+    assert not app.select_accounts("9805678", None)[0]                            # 複委託帳號不能當證券帳號
+    assert app.select_accounts("9801234", "9805678")[0] and app.state == "ready"
+    assert app.engine.mode == "dry_run" and app.engine.store.folder.name == "dry_run"
+    assert sec.load("A123456789") == "pw" and app.session()["profile"]["has_saved_password"]
+    app.logout()
+    assert app.state == "logged_out" and app.engine is None
+    # 重新開啟程式：記住密碼＋上次的帳號 → 自動登入直接可交易
+    app2, kgis2 = _app(folder, sec)
+    assert app2.auto_login()
+    _wait(app2, "ready")
+    assert app2.engine.broker.tw_account == "9801234" and app2.engine.broker.us_account == "9805678"
+    app2.logout()
+    # 取消記住密碼：密碼刪除，不再自動登入
+    app3, _ = _app(folder, sec)
+    assert app3.start_login("A123456789", "", False, "dry_run")[0]                 # 用已記住的密碼
+    _wait(app3, "ready")
+    assert sec.load("A123456789") is None
+    app3.logout()
+    app4, _ = _app(folder, sec)
+    assert not app4.auto_login() and not app4.start_login("A123456789", "", False, "dry_run")[0]
+
+
+def test_app_live_is_never_auto_and_modes_have_separate_data():
+    from trader.secret_store import MemorySecretStore
+    folder, sec = tempfile.mkdtemp(), MemorySecretStore()
+    app, kgis = _app(folder, sec)
+    app.start_login("A123456789", "pw", True, "live", "確認")
+    _wait(app, "select_account")
+    app.select_accounts("9801234", None)
+    assert app.engine.mode == "live" and app.engine.store.folder.name == "live"
+    app.logout()
+    app2, _ = _app(folder, sec)
+    assert not app2.auto_login() and app2.state == "logged_out"                  # 正式模式不自動登入
+
+
+def test_app_login_failure_shows_kgi_reason():
+    app, _ = _app()
+
+    class Bad(KgiBroker):
+        def connect(self, pid, pwd):
+            print("--- IsSucceed:False ReplyString:登入失敗：請檢查帳號密碼。")
+            raise __import__("trader.kgi_gateway", fromlist=["BrokerError"]).BrokerError("登入失敗")
+    app.broker_factory = lambda simulation, dry_run: Bad(kgi_module=FakeKgi())
+    app.start_login("A123456789", "x", False, "dry_run")
+    _wait(app, "logged_out")
+    assert "請檢查帳號密碼" in app.session()["error"]
+
+
+def test_server_login_endpoints():
+    from http.server import ThreadingHTTPServer
+    app, _ = _app()
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app, "T0K3N", []))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(method, path, body=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        h = {"Host": f"127.0.0.1:{port}", "X-Pair-Code": "T0K3N"}
+        if body is not None:
+            h["Content-Type"] = "application/json"
+        c.request(method, path, json.dumps(body) if body is not None else None, h)
+        r = c.getresponse()
+        return r.status, json.loads(r.read() or b"{}")
+    try:
+        assert req("GET", "/api/state")[0] == 409                               # 未登入
+        assert req("GET", "/api/ping")[1]["state"] == "logged_out"
+        st, j = req("POST", "/api/login", {"person_id": "A123456789", "password": "pw", "mode": "dry_run"})
+        assert j["ok"]
+        _wait(app, "select_account")
+        assert req("POST", "/api/select_account", {"tw": "9801234", "us": ""})[1]["ok"]
+        assert req("GET", "/api/state")[0] == 200 and req("GET", "/api/session")[1]["user"] == "A12****789"
+        assert req("POST", "/api/logout", {})[1]["ok"] and req("GET", "/api/state")[0] == 409
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_web_page_capabilities_match_server():
     """index.html 內嵌的選項表（未連線時用來停用選項）必須與 kgi_spec 一致。"""
     import re

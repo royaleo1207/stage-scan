@@ -94,18 +94,31 @@ class KgiBroker:
         self.min_interval = 1.1 if simulation else 0.0
         self._last_place = 0.0
         self.raw_info: dict[str, dict] = {}
+        self.accounts: list[dict] = []
         self._reconnecting = False
         self._closing = False
         self.clock: Callable[[], datetime] = mh.now_tpe    # Engine 建立時會換成它的時鐘     # 最近一次庫存查詢：券商回傳幾列、有哪些欄位（只供診斷）
 
     # ── 連線與帳號 ──
     def login(self, person_id: str, password: str, tw_account: str | None, us_account: str | None) -> list[dict]:
+        """登入並設定帳號（指令列模式使用）。"""
+        accounts = self.connect(person_id, password)
+        self.select(tw_account, us_account)
+        return accounts
+
+    def connect(self, person_id: str, password: str) -> list[dict]:
+        """登入凱基，回傳帳號清單 [{account, account_flag, broker_id}]。"""
         if not person_id or not password:
-            raise BrokerError("缺少身分證字號或密碼（請填 trader/.env 的 KGI_PERSON_ID、KGI_PERSON_PWD）")
+            raise BrokerError("請輸入身分證字號與密碼")
         self.api = self.kgi.login(person_id, password, simulation=self.simulation)
         if not hasattr(self.api, "show_account"):
-            raise BrokerError("登入失敗（請看上方 SuperPy 訊息：帳密、CA 憑證或連線）")
-        accounts = list(self.api.show_account() or [])
+            raise BrokerError("登入失敗（帳號密碼、CA 憑證或網路連線，請看下方訊息）")
+        self.accounts = list(self.api.show_account() or [])
+        return self.accounts
+
+    def select(self, tw_account: str | None, us_account: str | None) -> None:
+        """設定證券、複委託帳號並註冊回報與行情 callback。程式不會自動選第一個帳號。"""
+        accounts = self.accounts
 
         def pick(acc: str | None, flag: str) -> str | None:
             if not acc:
@@ -116,12 +129,12 @@ class KgiBroker:
             raise BrokerError(f"帳號 {acc} 不在登入帳號清單中，或不是{flag}帳號；可用帳號：" +
                               "、".join(f"{r.get('account')}（{r.get('account_flag')}）" for r in accounts))
 
-        self.tw_account = pick(tw_account, "證券")
-        self.us_account = pick(us_account, "複委託")
-        if not self.tw_account and not self.us_account:
+        tw, us = pick(tw_account, "證券"), pick(us_account, "複委託")
+        if not tw and not us:
             raise BrokerError("請在 trader/.env 指定 KGI_TW_ACCOUNT（證券）或 KGI_US_ACCOUNT（複委託），"
                               "程式不會自動選第一個帳號。可用帳號：" +
                               "、".join(f"{r.get('account')}（{r.get('account_flag')}）" for r in accounts))
+        self.tw_account, self.us_account = tw, us
         if self.tw_account:
             self.api.set_Account(self.tw_account)
             self.api.Order.set_event(lambda ev: self._sdk_event("TW", ev))
@@ -136,7 +149,6 @@ class KgiBroker:
             self.api.USQuote.set_cb_tick(self._us_tick)
         if hasattr(self.api, "set_disconnect_cb"):
             self.api.set_disconnect_cb(self._disconnected)
-        return accounts
 
     def logout(self):
         self._closing = True

@@ -255,6 +255,25 @@ h3.sec{font:600 15px/1.4 var(--serif);margin:18px 0 8px}
 .invt td.wrap{white-space:normal;min-width:180px}
 .newscan{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:0 0 14px;padding:10px 14px;border-radius:8px;background:var(--s2t);color:var(--ink)}
 .newscan .btn{padding:4px 12px}
+/* 登入 */
+body.need-login #loader, body.need-login #app, body.need-login #topActs{display:none!important}
+.lgbox{max-width:440px;margin:24px auto 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px 22px}
+.lgbox h2{font:900 24px/1.3 var(--serif);margin:0 0 14px}
+.lgbox form{display:grid;gap:12px}
+.lgbox .fld input,.lgbox .fld select{padding:9px 10px;font-size:15px}
+.lgchk{display:flex;gap:8px;align-items:center;font-size:14px;cursor:pointer}
+.lgchk input{width:16px;height:16px;accent-color:var(--s2)}
+.lgmodes{border:1px solid var(--line);border-radius:8px;padding:8px 12px 10px;margin:0}
+.lgmodes legend{font-size:12.5px;color:var(--muted);padding:0 4px}
+.lgmodes label{display:flex;gap:8px;align-items:center;padding:4px 0;font-size:14px;cursor:pointer}
+.lglive{border:1px solid var(--s2);border-radius:8px;padding:10px 12px;color:var(--s2);display:grid;gap:8px}
+.lgbtn{padding:10px;font-size:15px}
+.lgbtn:disabled{opacity:.5;cursor:wait}
+.lghint{font-size:13px;color:var(--muted);margin:0}
+.lgnote{font-size:12px;color:var(--muted);margin:16px 0 0;line-height:1.6}
+.linkbtn{border:0;background:none;color:var(--focus);cursor:pointer;padding:0;font-size:13px;text-decoration:underline}
+.userbar{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:13px;color:var(--muted)}
+.userbar b{color:var(--ink);font-weight:500}
 </style>
 </head>
 <body>
@@ -268,6 +287,33 @@ h3.sec{font:600 15px/1.4 var(--serif);margin:18px 0 8px}
       <button class="btn" id="btnReload" type="button">載入新的掃描結果</button>
     </div>
   </header>
+  <section id="loginView" class="hidden" aria-labelledby="lgTitle">
+    <div class="lgbox">
+      <h2 id="lgTitle">登入凱基</h2>
+      <form id="loginForm" autocomplete="on">
+        <label class="fld"><span>身分證字號</span><input id="lgId" name="username" autocomplete="username" maxlength="10" spellcheck="false" autocapitalize="characters"></label>
+        <label class="fld"><span>密碼</span><input id="lgPwd" name="password" type="password" autocomplete="current-password"></label>
+        <p class="lghint hidden" id="lgSaved">已記住密碼，直接按「登入」即可。<button type="button" class="linkbtn" id="lgForget">忘記密碼</button></p>
+        <label class="lgchk" id="lgRememberWrap"><input type="checkbox" id="lgRemember"> 記住密碼（下次打開程式自動登入）</label>
+        <fieldset class="lgmodes"><legend>模式</legend><div id="lgModes"></div></fieldset>
+        <div class="lglive hidden" id="lgLive">
+          <b>正式下單會用真實資金送出委託。</b>
+          <label class="fld"><span>請輸入「確認」兩個字</span><input id="lgConfirm" autocomplete="off"></label>
+        </div>
+        <button class="btn primary lgbtn" type="submit" id="lgBtn">登入</button>
+        <p class="err" id="lgErr" role="alert"></p>
+        <p class="lghint" id="lgMsg" aria-live="polite"></p>
+      </form>
+      <form id="acctForm" class="hidden">
+        <p class="lghint">登入成功，請選擇要使用的帳號（之後會記住）。</p>
+        <label class="fld"><span>台股（證券帳號）</span><select id="acTw"></select></label>
+        <label class="fld"><span>美股（複委託帳號）</span><select id="acUs"></select></label>
+        <button class="btn primary lgbtn" type="submit">開始使用</button>
+        <p class="err" id="acErr" role="alert"></p>
+      </form>
+      <p class="lgnote">帳號密碼只在你的電腦上使用，不會上傳。勾選「記住密碼」時，密碼存在 Windows「認證管理員」。第一次使用前，請先依凱基說明安裝 CA 憑證並簽署 API 同意書。</p>
+    </div>
+  </section>
 
   <section id="loader">
     <div class="drop" id="drop">
@@ -971,6 +1017,7 @@ async function tfetch(path, body){
     {method:"POST", headers:{"X-Pair-Code":code, "Content-Type":"application/json"}, body:JSON.stringify(body)};
   const r = await fetch(TRADER + path, opt);
   const j = await r.json().catch(() => ({}));
+  if (r.status === 409 && j.need_login && APP) setTimeout(refreshSession, 0);
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
 }
@@ -1223,10 +1270,103 @@ $("newScan").addEventListener("click", async e => {
   try{ const o = await (await fetch("stage_scan.json", {cache:"no-store"})).json(); useData(o, true); $("newScan").classList.add("hidden"); }
   catch(err){ alert("更新失敗：" + err.message); }
 });
+
+/* ══════════════ 登入（本機主畫面） ══════════════ */
+let SESSION = null, sessTimer = null;
+function renderLogin(s){
+  const lf = $("loginForm"), af = $("acctForm");
+  const busy = s.state === "logging_in";
+  lf.classList.toggle("hidden", s.state === "select_account");
+  af.classList.toggle("hidden", s.state !== "select_account");
+  if (!$("lgModes").children.length){
+    $("lgModes").innerHTML = Object.entries(s.modes).map(([k, v]) => `<label><input type="radio" name="lgMode" value="${k}"> ${esc(v)}</label>`).join("");
+    $("lgModes").addEventListener("change", () => $("lgLive").classList.toggle("hidden", lgMode() !== "live"));
+    const p = s.profile;
+    $("lgId").value = p.person_id || "";
+    $("lgRemember").checked = !!p.remember;
+    (document.querySelector(`input[name=lgMode][value="${p.mode || "dry_run"}"]`) || document.querySelector("input[name=lgMode]")).checked = true;
+    $("lgLive").classList.toggle("hidden", lgMode() !== "live");
+  }
+  $("lgRememberWrap").classList.toggle("hidden", !s.remember_available);
+  $("lgSaved").classList.toggle("hidden", !(s.profile.has_saved_password && $("lgId").value.trim().toUpperCase() === s.profile.person_id));
+  $("lgPwd").placeholder = s.profile.has_saved_password ? "●●●●●●（已記住）" : "";
+  for (const el of lf.querySelectorAll("input,button")) el.disabled = busy;
+  $("lgBtn").textContent = busy ? "登入中…" : "登入";
+  $("lgErr").textContent = s.error || "";
+  $("lgMsg").textContent = s.message || "";
+  if (s.state === "select_account"){
+    const opts = (flag, cur) => `<option value="">不使用</option>` + s.accounts.filter(a => a.flag === flag)
+      .map(a => `<option value="${esc(a.account)}"${a.account === cur ? " selected" : ""}>${esc(a.account)}</option>`).join("");
+    const tws = s.accounts.filter(a => a.flag === "證券"), uss = s.accounts.filter(a => a.flag === "複委託");
+    $("acTw").innerHTML = opts("證券", s.profile.tw_account || (tws.length === 1 ? tws[0].account : ""));
+    $("acUs").innerHTML = opts("複委託", s.profile.us_account || (uss.length === 1 ? uss[0].account : ""));
+    $("acErr").textContent = s.error || "";
+  }
+}
+const lgMode = () => document.querySelector("input[name=lgMode]:checked")?.value || "dry_run";
+function renderUserBar(s){
+  const box = $("topActs");
+  let bar = $("userBar");
+  if (!bar){ bar = document.createElement("div"); bar.id = "userBar"; bar.className = "userbar"; box.prepend(bar); }
+  bar.innerHTML = s.static ? "" : `<span><b>${esc(s.user)}</b></span><span class="modetag ${s.mode === "live" ? "live" : "sim"}">${esc(MODE_TXT[s.mode] || s.mode)}</span>
+    <span>台股 ${esc(s.tw_account || "未使用")}・美股 ${esc(s.us_account || "未使用")}</span><button class="btn" type="button" id="btnLogout">登出</button>`;
+}
+async function refreshSession(){
+  clearTimeout(sessTimer);
+  let s;
+  try{ s = await tfetch("/api/session"); }
+  catch(e){ $("lgErr").textContent = "下單程式沒有回應，請關閉後重新開啟程式。"; sessTimer = setTimeout(refreshSession, 3000); return; }
+  SESSION = s;
+  const ready = s.state === "ready";
+  document.body.classList.toggle("need-login", !ready);
+  $("loginView").classList.toggle("hidden", ready);
+  if (ready){
+    renderUserBar(s);
+    if (!ord.conn) connect();
+    return;
+  }
+  ord.conn = null;
+  renderLogin(s);
+  if (s.state === "logging_in") sessTimer = setTimeout(refreshSession, 1000);
+}
+$("loginForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const mode = lgMode();
+  $("lgErr").textContent = "";
+  try{
+    const r = await tfetch("/api/login", {person_id:$("lgId").value.trim(), password:$("lgPwd").value,
+      remember:$("lgRemember").checked, mode, confirm:$("lgConfirm").value});
+    $("lgPwd").value = "";
+    if (!r.ok){ $("lgErr").textContent = r.error; return; }
+  }catch(err){ $("lgErr").textContent = err.message; return; }
+  refreshSession();
+});
+$("lgId").addEventListener("input", () => SESSION && renderLogin(SESSION));
+$("lgForget").addEventListener("click", async () => {
+  await tfetch("/api/forget_password", {}).catch(() => {});
+  $("lgRemember").checked = false; refreshSession();
+});
+$("acctForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (!$("acTw").value && !$("acUs").value){ $("acErr").textContent = "請至少選一個帳號"; return; }
+  try{
+    const r = await tfetch("/api/select_account", {tw:$("acTw").value, us:$("acUs").value});
+    if (!r.ok){ $("acErr").textContent = r.error; return; }
+  }catch(err){ $("acErr").textContent = err.message; return; }
+  refreshSession();
+});
+document.addEventListener("click", async e => {
+  if (!e.target.closest("#btnLogout")) return;
+  const open = SESSION && ord.conn ? (await tfetch("/api/state").catch(() => ({positions:[]}))).positions.filter(p => ["open","exiting","exit_waiting"].includes(p.status)).length : 0;
+  if (!confirm(open ? `目前有 ${open} 個部位由程式監控停損停利，登出後會暫停監控（部位不會賣出，下次登入同一模式會接續）。確定登出？` : "確定登出？")) return;
+  await tfetch("/api/logout", {}).catch(() => {});
+  ord.conn = null; watchTrade(false); showTab("paneScan"); refreshSession();
+});
+
 if (APP){
-  document.body.classList.add("app");
+  document.body.classList.add("app", "need-login");
   $("pairWrap").classList.add("hidden"); $("btnConn").classList.add("hidden");
-  connect();
+  refreshSession();
   setInterval(checkScan, 5 * 60 * 1000);
   setTimeout(checkScan, 3000);
 }
