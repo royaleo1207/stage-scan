@@ -1236,7 +1236,16 @@ async function scanFailed(){
   if (!APP) return;
   try{
     const info = await tfetch("/api/scan_info");
-    $("err").innerHTML = `${esc(info.error || "尚未下載到選股資料")}　<button class="btn" type="button" id="btnScanRetry">重新下載</button>`;
+    if (info.available){       // 剛下載好：直接顯示
+      return useData(await (await fetch("stage_scan.json", {cache:"no-store"})).json(), true);
+    }
+    if (!info.error){          // 啟動後第一次下載還沒完成：稍等自動顯示
+      $("err").style.color = "var(--muted)";
+      $("err").textContent = "正在下載最新選股資料，完成後會自動顯示…";
+      return setTimeout(scanFailed, 2000);
+    }
+    $("err").style.color = "";
+    $("err").innerHTML = `${esc(info.error)}　<button class="btn" type="button" id="btnScanRetry">重新下載</button>`;
   }catch(e){ $("err").textContent = "下單程式沒有回應，請關閉後重新開啟程式。"; }
 }
 document.addEventListener("click", async e => {

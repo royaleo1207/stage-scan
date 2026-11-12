@@ -66,6 +66,8 @@ class ScanFeed:
         """下載最新版；有新資料回傳 True。失敗時保留舊檔並記錄錯誤。"""
         now = datetime.now(TPE).isoformat(timespec="seconds")
         etag = self.meta.get("etag") if self.path.exists() else None
+        with self.lock:
+            self.meta["error"] = None       # 下載中：畫面顯示「正在下載」
         try:
             status, body, new_etag = self.fetch(self.url, etag)
         except Exception as e:  # noqa: BLE001  網路錯誤不影響下單
