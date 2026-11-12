@@ -134,7 +134,7 @@ def app_page(pair_code: str) -> bytes:
     return html.replace(TOKEN_META, f'<meta name="trader-token" content="{pair_code}">', 1).encode("utf-8")
 
 
-def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, on_quit=None):
+def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, on_quit=None, on_show=None):
     """target：App（主畫面登入流程）或已登入的 Engine（指令列模式、測試）。"""
     from .app_session import StaticApp
     app = target if hasattr(target, "session") else StaticApp(target)
@@ -296,6 +296,13 @@ def make_handler(target, pair_code: str, allowed_origins: list[str], scan=None, 
 
         def do_POST(self):
             path = urlparse(self.path).path
+            if path == "/api/show":                 # 再次雙擊程式：把原本的視窗叫到最前面
+                if not self._guard(need_auth=False):
+                    return
+                if self.headers.get("Origin"):        # 只接受本機程式呼叫，不接受網頁
+                    return self._json(403, {"ok": False})
+                ok = bool(on_show and on_show())
+                return self._json(200, {"ok": ok})
             if not self._guard():
                 return
             try:
@@ -408,8 +415,10 @@ class Services:
         self.pair = os.environ.get("PAIR_CODE") or f"{secrets.randbelow(10**6):06d}"
         self.scan = ScanFeed(self.runtime, url=self.cfg["scan_url"], log=self.log)
         self.quit_hooks: list = []
+        self.show_hook = None          # 桌面版設定：把視窗叫到最前面，成功回傳 True
         self.srv = ThreadingHTTPServer((HOST, port), make_handler(app, self.pair, self.cfg.get("allowed_origins", []),
-                                                                  self.scan, on_quit=self.request_quit))
+                                                                  self.scan, on_quit=self.request_quit,
+                                                                  on_show=lambda: bool(self.show_hook and self.show_hook())))
         self.port = self.srv.server_address[1]
         self.url = f"http://{HOST}:{self.port}/"
         self.stop = threading.Event()
@@ -445,6 +454,18 @@ class Services:
         except Exception:  # noqa: BLE001
             pass
         threading.Thread(target=self.srv.shutdown, daemon=True).start()
+
+
+def show_existing(port: int = PORT) -> bool:
+    """請已在執行的程式把視窗叫到最前面；成功回傳 True。"""
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"http://{HOST}:{port}/api/show", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return bool(json.loads(r.read().decode("utf-8")).get("ok"))
+    except (OSError, ValueError):
+        return False
 
 
 def existing_instance(port: int = PORT) -> bool:

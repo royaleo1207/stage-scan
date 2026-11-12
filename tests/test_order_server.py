@@ -885,6 +885,15 @@ def test_desktop_services_quit_and_single_instance():
     svc.quit_hooks.append(lambda: closed.append(True))       # 例如關掉程式視窗
     svc.start_background(serve=True)
     assert existing_instance(svc.port)                        # 第二次雙擊時會偵測到
+    from trader.order_server import show_existing
+    shown = []
+    assert not show_existing(svc.port)                        # 沒有視窗時回報失敗（改開瀏覽器）
+    svc.show_hook = lambda: shown.append(True) or True
+    assert show_existing(svc.port) and shown                  # 有視窗時把它叫到最前面
+    c = http.client.HTTPConnection("127.0.0.1", svc.port, timeout=5)
+    c.request("POST", "/api/show", "{}", {"Host": f"127.0.0.1:{svc.port}", "Origin": "https://evil.example",
+                                          "Content-Type": "application/json"})
+    assert c.getresponse().status == 403 and len(shown) == 1  # 網頁不能呼叫
     c = http.client.HTTPConnection("127.0.0.1", svc.port, timeout=5)
     c.request("GET", "/", headers={"Host": f"127.0.0.1:{svc.port}"})
     html = c.getresponse().read().decode("utf-8")

@@ -44,6 +44,17 @@ def redirect_output(runtime: Path) -> Path:
     return log
 
 
+def ask_close() -> bool:
+    """按視窗的 X 時，用 Windows 的確認視窗詢問（不依賴 pywebview 內建的確認功能）。"""
+    try:
+        import ctypes
+        MB_YESNO, MB_ICONQUESTION, MB_TOPMOST, MB_SETFOREGROUND, IDYES = 0x4, 0x20, 0x40000, 0x10000, 6
+        return ctypes.windll.user32.MessageBoxW(0, CLOSE_TEXT, TITLE,
+                                                MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND) == IDYES
+    except (AttributeError, OSError):
+        return True
+
+
 def open_window(url: str, svc=None, storage: Path | None = None) -> bool:
     """開啟獨立視窗，視窗關閉後才回傳。沒有 pywebview 時回傳 False。"""
     try:
@@ -54,9 +65,39 @@ def open_window(url: str, svc=None, storage: Path | None = None) -> bool:
         webview.settings["ALLOW_DOWNLOADS"] = True          # 「匯出計畫 JSON」需要
     except (AttributeError, TypeError):
         pass
-    win = webview.create_window(TITLE, url, width=1320, height=900, min_size=(960, 640), confirm_close=svc is not None)
+    state = {"quitting": False}
+    win = webview.create_window(TITLE, url, width=1320, height=900, min_size=(960, 640))
+
+    def on_closing():
+        # 「結束程式」已經確認過，直接關；按 X 則先詢問，回傳 False 取消關閉
+        if state["quitting"] or svc is None:
+            return True
+        if ask_close():
+            state["quitting"] = True
+            return True
+        return False
+
+    try:
+        win.events.closing += on_closing
+    except AttributeError:          # 舊版 pywebview 沒有 closing 事件：改用內建確認
+        win.confirm_close = True
+
     if svc is not None:
-        svc.quit_hooks.append(win.destroy)
+        def quit_window():
+            state["quitting"] = True
+            win.destroy()
+
+        def show_window():
+            try:
+                win.restore()
+                win.show()
+                win.on_top = True       # 暫時置頂，把視窗帶到最前面
+                win.on_top = False
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+        svc.quit_hooks.append(quit_window)
+        svc.show_hook = show_window
     kw = {"localization": {"global.quitConfirmation": CLOSE_TEXT, "global.ok": "確定", "global.cancel": "取消"}}
     if storage is not None:
         kw.update(private_mode=False, storage_path=str(storage))   # 保留下單夾等瀏覽器資料
@@ -68,7 +109,7 @@ def main() -> int:
     os.chdir(ROOT)
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
-    from trader.order_server import PORT, Services, existing_instance
+    from trader.order_server import PORT, Services, existing_instance, show_existing
     from trader.store import RUNTIME
 
     console = None
@@ -76,11 +117,11 @@ def main() -> int:
         console = redirect_output(RUNTIME)
     print(f"===== 啟動 {TITLE} =====")
 
-    if existing_instance(PORT):                              # 已經在執行：只開視窗
-        url = f"http://127.0.0.1:{PORT}/"
-        if not open_window(url):
+    if existing_instance(PORT):
+        # 已經在執行：把原本的視窗叫到最前面，不另開視窗（避免關掉後程式還在背景執行卻看不到）
+        if not show_existing(PORT):
             import webbrowser
-            webbrowser.open(url)
+            webbrowser.open(f"http://127.0.0.1:{PORT}/")
         return 0
     try:
         svc = Services(PORT)
